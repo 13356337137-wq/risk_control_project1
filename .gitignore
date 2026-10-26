@@ -1,0 +1,71 @@
+# ===== 依赖与构建产物 =====
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+package-lock.json.bak
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ===== 密钥与本地配置（公开仓库，绝不能提交）=====
+.env
+.env.*
+!env.example
+*.pem
+*.key
+*.p12
+*.pfx
+config.local.*
+secrets.*
+
+# ===== 日志与临时文件 =====
+*.log
+logs/
+*.tmp
+*.swp
+*~
+
+# ===== 客户材料与数据（含真实个人信息的，一律不入库）=====
+inputs/**/*.pdf
+inputs/**/*.jpg
+inputs/**/*.jpeg
+inputs/**/*.png
+inputs/**/*.xlsx
+!inputs/README.md
+*.sql.gz
+*.dump
+backup/
+backups/
+
+# ===== 工作草稿与备份（保留文档，不保留中间件）=====
+tmp/*_备份.md
+tmp/recover*
+tmp/*恢复版*
+tmp/*.bak
+*.bak
+
+# ===== 第三方参考资料（体量大、非本项目产物）=====
+风控_项目一_参考/
+
+# ===== 编辑器与系统 =====
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== 本地数据库文件（规范禁止 SQLite，出现即为误提交）=====
+*.db
+*.sqlite
+*.sqlite3
