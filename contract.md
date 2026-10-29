@@ -9,7 +9,7 @@
 | 鉴权 | Bearer Token；前台 bs_token，后台 bs_admin_token，互不读取 |
 | 响应 | {code, message, data}；code=0 为成功 |
 | 分页 | page 从 1 起，size 默认 20，上限 100 |
-| 幂等 | 创建任务以文件哈希判重，重复提交返回原 task_id |
+| 幂等 | 创建任务以文件哈希判重，重复提交返回原 task_id；补件不判重，追加到原任务的 `task_file` 并重新进入解析 |
 | 时间 | 存储与返回均为 UTC+8，带偏移 |
 | 金额 | decimal(18,2)；接口用字符串传输，禁止 JSON 浮点 |
 | 限流 | 单账号创建任务 10 次/分钟 |
@@ -27,7 +27,7 @@
 | GET | /tasks | page、size、status、task_type | 200 分页 | — |
 | GET | /tasks/{id} | — | 200 详情 | 404 |
 | POST | /tasks/{id}/retry | — | 202 | E_STATE |
-| POST | /tasks/{id}/supplement | multipart：file | 202 | E_STATE |
+| POST | /tasks/{id}/supplement | multipart：file | 202；追加一条 task_file（role=supplement），不新建任务 | E_STATE |
 | DELETE | /tasks/{id} | — | 204 逻辑删除 | E_STATE |
 
 ## 报告（仅银行侧）
@@ -98,6 +98,7 @@
 | conclusions | array | {code,level,threshold,value}，按阈值判定出的结论，银行可调阈值 |
 | trend | array | {month,income,expense} |
 | evidence | array | {txn_id,rule_code,page_no,x,y} |
+| materials | array | 本次报告依据的材料清单 {file_id,role,pages,sha256}；role 为 original / supplement，按提交顺序 |
 | version | int | 只增不改 |
 
 # 载体与结论上限
@@ -116,14 +117,14 @@
 | --- | --- | --- |
 | staff_user | id、name、role、status | role ∈ 审批人/模板管理员/运营管理员/系统管理员 |
 | file_obj | id、sha256、mime、carrier、width、height、pages、has_text_layer、storage_path | sha256 唯一；carrier ∈ electronic/image/screenshot |
-| task | id、biz_no、task_type、channel、file_id、carrier、template_id、template_version、status、check_result、period_start、period_end、hits | biz_no 唯一；task_type ∈ credit/batch；carrier 冗余便于统计 |
+| task | id、biz_no、task_type、channel、file_id、carrier、template_id、template_version、status、check_result、period_start、period_end、hits | biz_no 唯一；task_type ∈ credit/batch；carrier 冗余便于统计；file_id 仅存首份主文件，多份看 task_file |
+| task_file | id、task_id、file_id、role、seq、created_at | (task_id,seq) 唯一；role ∈ original/supplement；同一任务内 file_id 不重复；补件只追加不覆盖 |
 | bank_account | id、task_id、account_no、bank_name、period_start、period_end、opening_balance、closing_balance | 账号脱敏后落库 |
-| txn | id、task_id、account_id、txn_date、direction、amount、balance、summary、counterparty_name、page_no | amount 恒正；按月分区 |
+| txn | id、task_id、account_id、txn_date、direction、amount、balance、summary、counterparty_name、page_no、coord_x、coord_y、confidence、drop_reason | amount 恒正；按月分区；坐标与置信度用于证据回溯与失败归因，drop_reason 记录六类剔除原因 |
 | metric_value | id、task_id、metric_code、metric_name、value_num、unit、note、caliber_version | 名与值同行 |
-| report | id、task_id、version、carrier、verdict、layers、limitations、evidence | 只增不改 |
+| report | id、task_id、version、carrier、verdict、layers、limitations、evidence、metric_set_version、threshold_version | 只增不改；两个版本号用于历史报告按当时口径解释 |
 | template | id、bank_code、version、status、field_map | 只增不改 |
 | rule | id、rule_code、version、category、expr、threshold | 只增不改 |
-| appeal | id、task_id、txn_id、status、resolution | 只标记不删 |
 | audit_log | id、actor_id、action、object_type、object_id、created_at | 只追加 |
 
 # 状态机
@@ -154,3 +155,6 @@
 | 2026-10-26 | 报告改为单份仅银行侧；移除 audience | 后端、前端、算法 |
 | 2026-10-26 | 增加三类载体：electronic / image / screenshot；新增两条图片错误码；报告加 carrier 与 limitations | 全部 |
 | 2026-10-26 | 结论改为按阈值判定：报告加 conclusions、threshold_version；指标集加 metric_set_version；新增阈值配置接口 | 后端、算法、前端 |
+| 2026-10-29 | txn 增 coord_x、coord_y、confidence、drop_reason；report 增 metric_set_version、threshold_version | 数据、后端、算法 |
+| 2026-10-29 | 删除 appeal 表（异议申诉功能已从需求移除），表数十一改十 | 数据、后端、产品设计 |
+| 2026-10-29 | 新增 task_file 关联表承载补件多文件（表数十改十一）；报告结构加 materials；补件不新建任务 | 数据、后端、算法、前端 |

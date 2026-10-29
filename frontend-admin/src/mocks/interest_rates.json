@@ -1,0 +1,34 @@
+{
+  "note": "示例数据，非实时挂牌利率；正式版由银行提供并版本化。日利率 = 年利率 / basis_days。",
+  "source": "mock",
+  "updated_at": "2026-10-29",
+  "basis_days": 360,
+  "settlement_days": "每季末月 20 日",
+  "rates": [
+    {
+      "product": "活期",
+      "annual": "0.0020",
+      "min_balance": "0.00"
+    },
+    {
+      "product": "整存整取三个月",
+      "annual": "0.0080",
+      "min_balance": "50.00"
+    },
+    {
+      "product": "整存整取六个月",
+      "annual": "0.0100",
+      "min_balance": "50.00"
+    },
+    {
+      "product": "整存整取一年",
+      "annual": "0.0110",
+      "min_balance": "50.00"
+    },
+    {
+      "product": "整存整取三年",
+      "annual": "0.0150",
+      "min_balance": "50.00"
+    }
+  ]
+}
