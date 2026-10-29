@@ -64,6 +64,14 @@
 | [ ] | BE-23 | 服务端载体判定：electronic / image / screenshot | 三份样本各判一次，结果正确且不采信前端自称 |
 | [ ] | BE-24 | 图片三关校验：分辨率、清晰度、完整度，不合格返回对应错误码 | 小图返回 E_IMAGE_LOWQ，模糊图返回 E_IMAGE_BLUR |
 
+## 模板（依赖前端标注产物）
+
+| 状态 | 编号 | 任务 | 验收命令 |
+| --- | --- | --- | --- |
+| [ ] | BE-30 | 模板 CRUD + 版本只增不改 + 同 bank_code 启用唯一 | 创建后 GET 可见；再次 publish 旧版本自动停用 |
+| [ ] | BE-31 | `POST /templates/dry-run`：传样例与 field_map，返回抽取值、明细条数、自检三项 | 正常样本 200；表头识别失败返回 X101 |
+| [ ] | BE-32 | 补件：`POST /tasks/{id}/supplement` 追加 task_file 并重新入解析，不新建任务 | 同一任务补两次后 material 数为 3（1 原件 + 2 补件），task 数仍为 1 |
+
 # 完成定义
 
 命令跑通、代码合并、history 已写、tasks 已勾，四条缺一不可。
