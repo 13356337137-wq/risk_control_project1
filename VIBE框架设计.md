@@ -16,6 +16,7 @@
   integration.md   分工可行性与集成方案          仅 PM/PD 可写
   mock.md          mock 数据规范（九场景）       仅 PM/PD 可写
   frontend/        Agent.md design.md tasks.md chat.md history/ inputs/
+  frontend-admin/  银行侧应用（5174）及其 README
   backend/         同上
   algorithm/       同上，另含代码区：
     ocr/           解析与抽取
