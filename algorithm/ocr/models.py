@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+Direction = Literal["in", "out"]
+
+
+class Template(BaseModel):
+    """银行版式模板。field_map 的键为规范字段名，值为表头别名或 0 起的列序号。"""
+
+    bank_code: str
+    version: int
+    field_map: dict[str, str | int] = Field(default_factory=dict)
+
+
+class Transaction(BaseModel):
+    page_no: int
+    row_no: int
+    txn_date: str | None = None
+    summary: str | None = None
+    counterparty_name: str | None = None
+    direction: Direction | None = None
+    amount: Decimal | None = None
+    balance: Decimal | None = None
+    confidence: float = 1.0
+    bbox: tuple[float, float, float, float] | None = None
+
+
+class PageSummary(BaseModel):
+    """页脚印的合计与笔数；文件没印的项为 None。"""
+
+    page_no: int
+    printed_count: int | None = None
+    printed_in: Decimal | None = None
+    printed_out: Decimal | None = None
+    footer_bbox: tuple[float, float, float, float] | None = None
+
+
+class ParseResult(BaseModel):
+    transactions: list[Transaction] = Field(default_factory=list)
+    field_completeness: float = 0.0
+    avg_confidence: float = 0.0
+    low_conf_ratio: float = 0.0
+    page_count: int = 0
+    footer_count: int | None = None
+    page_summaries: list[PageSummary] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
