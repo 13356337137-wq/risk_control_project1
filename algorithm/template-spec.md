@@ -173,6 +173,8 @@ page_size.w/h : 标注时使用的基准页面尺寸（pt），仅作记录
 
 标完必须能立刻验一遍，否则录错了没人知道。
 
+> 现状：dry-run 接口未实现，银行侧页面先用 `frontend-admin/src/mocks/ocr_lines.json` 演示「解析结果回贴原页 + 低置信标红」。真实结果接入后替换该 mock。
+
 | 项 | 约定 |
 | --- | --- |
 | 接口 | `POST /api/v1/templates/dry-run`（建议，需 PM/PD 落进 contract） |

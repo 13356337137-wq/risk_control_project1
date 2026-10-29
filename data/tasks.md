@@ -16,7 +16,7 @@
 | 状态 | 编号 | 任务 | 验收命令 |
 | --- | --- | --- | --- |
 | [ ] | DA-01 | 三库三角色 | SHOW DATABASES 与账号登录验证 |
-| [ ] | DA-02 | 十一张表结构与字段 | SHOW TABLES 得到十一张 |
+| [ ] | DA-02 | 十张表结构与字段 | SHOW TABLES 得到十一张 |
 | [ ] | DA-03 | txn 按月分区 | SHOW CREATE TABLE txn 含 PARTITION |
 | [ ] | DA-04 | 四组必备索引 | EXPLAIN 四条查询均走索引 |
 | [ ] | DA-05 | 利率表与计息规则表 | 结息反算可读到利率 |

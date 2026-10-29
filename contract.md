@@ -110,7 +110,7 @@
 
 服务端判定的 carrier 与报告中的 carrier 必须一致，不允许前端传入。
 
-# 数据契约（十一张表）
+# 数据契约（十张表）
 
 | 表 | 关键字段 | 约束 |
 | --- | --- | --- |
@@ -118,12 +118,11 @@
 | file_obj | id、sha256、mime、carrier、width、height、pages、has_text_layer、storage_path | sha256 唯一；carrier ∈ electronic/image/screenshot |
 | task | id、biz_no、task_type、channel、file_id、carrier、template_id、template_version、status、check_result、period_start、period_end、hits | biz_no 唯一；task_type ∈ credit/batch；carrier 冗余便于统计 |
 | bank_account | id、task_id、account_no、bank_name、period_start、period_end、opening_balance、closing_balance | 账号脱敏后落库 |
-| txn | id、task_id、account_id、txn_date、direction、amount、balance、summary、counterparty_name、page_no | amount 恒正；按月分区 |
+| txn | id、task_id、account_id、txn_date、direction、amount、balance、summary、counterparty_name、page_no、coord_x、coord_y、confidence、drop_reason | amount 恒正；按月分区；坐标与置信度用于证据回溯与失败归因，drop_reason 记录六类剔除原因 |
 | metric_value | id、task_id、metric_code、metric_name、value_num、unit、note、caliber_version | 名与值同行 |
-| report | id、task_id、version、carrier、verdict、layers、limitations、evidence | 只增不改 |
+| report | id、task_id、version、carrier、verdict、layers、limitations、evidence、metric_set_version、threshold_version | 只增不改；两个版本号用于历史报告按当时口径解释 |
 | template | id、bank_code、version、status、field_map | 只增不改 |
 | rule | id、rule_code、version、category、expr、threshold | 只增不改 |
-| appeal | id、task_id、txn_id、status、resolution | 只标记不删 |
 | audit_log | id、actor_id、action、object_type、object_id、created_at | 只追加 |
 
 # 状态机
@@ -154,3 +153,5 @@
 | 2026-10-26 | 报告改为单份仅银行侧；移除 audience | 后端、前端、算法 |
 | 2026-10-26 | 增加三类载体：electronic / image / screenshot；新增两条图片错误码；报告加 carrier 与 limitations | 全部 |
 | 2026-10-26 | 结论改为按阈值判定：报告加 conclusions、threshold_version；指标集加 metric_set_version；新增阈值配置接口 | 后端、算法、前端 |
+| 2026-10-29 | txn 增 coord_x、coord_y、confidence、drop_reason；report 增 metric_set_version、threshold_version | 数据、后端、算法 |
+| 2026-10-29 | 删除 appeal 表（异议申诉功能已从需求移除），表数十一改十 | 数据、后端、产品设计 |

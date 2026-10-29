@@ -1,19 +1,34 @@
 import { useState } from 'react';
 import { AnnotatePage } from './pages/Annotate';
+import { VerifyView } from './components/VerifyView';
+import { MetricsView } from './components/MetricsView';
+
+type Tab = 'annotate' | 'verify' | 'metrics' | 'list';
 
 export default function App() {
-  const [tab, setTab] = useState<'annotate' | 'list'>('annotate');
+  const [tab, setTab] = useState<Tab>('annotate');
+
+  const tabs: { key: Tab; label: string }[] = [
+    { key: 'annotate', label: '模板标注' },
+    { key: 'verify', label: '真伪判定' },
+    { key: 'metrics', label: '指标报告' },
+    { key: 'list', label: '模板列表' },
+  ];
 
   return (
     <div className="app">
       <div className="topbar">
         <h1>智能风控 · 银行侧</h1>
         <div className="tabs">
-          <button className={tab === 'annotate' ? 'active' : ''} onClick={() => setTab('annotate')}>模板标注</button>
-          <button className={tab === 'list' ? 'active' : ''} onClick={() => setTab('list')}>模板列表</button>
+          {tabs.map(t => (
+            <button key={t.key} className={tab === t.key ? 'active' : ''} onClick={() => setTab(t.key)}>{t.label}</button>
+          ))}
         </div>
       </div>
-      {tab === 'annotate' ? <AnnotatePage /> : <TemplateList />}
+      {tab === 'annotate' && <AnnotatePage />}
+      {tab === 'verify' && <div className="result-wrap"><VerifyView /></div>}
+      {tab === 'metrics' && <div className="result-wrap"><MetricsView /></div>}
+      {tab === 'list' && <TemplateList />}
     </div>
   );
 }
@@ -25,7 +40,7 @@ function TemplateList() {
         模板列表页尚未实现。<br />
         需要后端 <span className="mono">GET /templates</span>、<span className="mono">POST /templates</span>、
         <span className="mono">/publish</span> 就绪后接入。<br />
-        当前可用的是「模板标注」页：载入样例 → 框选 → 指定字段 → 导出 field_map。
+        当前可用：模板标注（标注并导出 field_map）、真伪判定（示例）、指标报告（示例）。
       </div>
     </div>
   );

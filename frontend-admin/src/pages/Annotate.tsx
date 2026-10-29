@@ -9,6 +9,7 @@ import {
 } from '../lib/template';
 import { openSampleFile } from '../lib/pdf';
 import { createDemoPage } from '../lib/sample';
+import { ocrDemo, LOW_CONF, type DemoLine } from '../lib/demo';
 import type { FieldMapV1, Issue, Rect, SamplePage, Selection, Tool } from '../lib/types';
 
 type Notice = { level: 'info' | 'error' | 'warning'; text: string } | null;
@@ -22,6 +23,7 @@ export function AnnotatePage() {
   const [tool, setTool] = useState<Tool>('meta');
   const [sel, setSel] = useState<Selection>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [demoLines, setDemoLines] = useState<DemoLine[] | null>(null);
 
   const pageCount = sample?.pageCount ?? 1;
   const issues: Issue[] = useMemo(() => validate(map, pageCount), [map, pageCount]);
@@ -174,6 +176,16 @@ export function AnnotatePage() {
     setNotice({ level: 'info', text: '已清空标注。' });
   }
 
+  function runDemoParse() {
+    if (!sample) { hint('先载入样例或点「示例页」，再试解析'); return; }
+    setDemoLines(ocrDemo.lines);
+    const low = ocrDemo.lines.filter(l => l.confidence < LOW_CONF).length;
+    setNotice({
+      level: low > 0 ? 'warning' : 'info',
+      text: `演示试解析完成：${ocrDemo.lines.length} 个字段值，其中 ${low} 个低置信（<${LOW_CONF}，已标红）。完整率 ${(ocrDemo.self_check.field_completeness * 100).toFixed(1)}%，平均置信度 ${(ocrDemo.self_check.avg_confidence * 100).toFixed(1)}%。这是样例数据，真实结果需后端 dry-run。`,
+    });
+  }
+
   return (
     <div className="app">
       <Toolbar
@@ -193,6 +205,16 @@ export function AnnotatePage() {
 
       {notice && <div className={`notice ${notice.level}`}>{notice.text}</div>}
 
+      <div className="toolbar2">
+        <button className="btn" onClick={runDemoParse}>演示：用模板试解析</button>
+        {demoLines && <button className="btn" onClick={() => { setDemoLines(null); hint('已关闭解析叠加'); }}>关闭叠加</button>}
+        <span className="muted">
+          {demoLines
+            ? `叠加 ${demoLines.length} 个字段值 · 低置信 ${demoLines.filter(l => l.confidence < LOW_CONF).length} 个（红色）`
+            : '用内置样例演示模板解析结果如何回贴到原页'}
+        </span>
+      </div>
+
       <div className="workspace">
         {sample ? (
           <Stage
@@ -206,6 +228,7 @@ export function AnnotatePage() {
             onSelect={setSel}
             onMove={moveRect}
             onHint={hint}
+            demoLines={demoLines ?? undefined}
           />
         ) : (
           <div className="stage-wrap">

@@ -1,0 +1,107 @@
+{
+  "note": "示例数据。真伪判定与指标报告是两条独立展示线，可用不同数据。",
+  "task_id": "T20261029001",
+  "carrier": "screenshot",
+  "verdict": "来源可疑",
+  "verdict_reason": "载体层判定为截图件，结论封顶",
+  "limitations": [
+    "截图件不做结构取证",
+    "账务层未执行（截图件不进授信）"
+  ],
+  "layers": {
+    "carrier": {
+      "verdict": "来源可疑",
+      "items": [
+        {
+          "code": "C0",
+          "name": "载体判定",
+          "result": "截图件",
+          "detail": "纯色背景、无噪点、边沿锐利"
+        },
+        {
+          "code": "I1",
+          "name": "EXIF 与设备",
+          "result": "缺失",
+          "detail": "截图通常不带拍摄信息"
+        },
+        {
+          "code": "I5",
+          "name": "屏幕摩尔纹",
+          "result": "不适用",
+          "detail": "屏幕直接截取，无摩尔纹"
+        }
+      ]
+    },
+    "content": {
+      "verdict": "通过",
+      "items": [
+        {
+          "code": "C1",
+          "name": "余额链",
+          "result": "通过",
+          "detail": "6 行明细逐笔闭合"
+        },
+        {
+          "code": "C2",
+          "name": "合计行",
+          "result": "通过",
+          "detail": "明细求和与页脚一致"
+        },
+        {
+          "code": "C3",
+          "name": "笔数",
+          "result": "通过",
+          "detail": "明细 6 条，页脚 6 条"
+        }
+      ]
+    },
+    "ledger": {
+      "verdict": "未执行",
+      "items": [
+        {
+          "code": "A1",
+          "name": "结息反算",
+          "result": "未执行",
+          "detail": "截图件不进入授信分析"
+        }
+      ]
+    },
+    "external": {
+      "verdict": "未做",
+      "items": [
+        {
+          "code": "E1",
+          "name": "回单验真",
+          "result": "未开通",
+          "detail": "外部核验未接入"
+        }
+      ]
+    }
+  },
+  "evidence": [
+    {
+      "txn_id": 1,
+      "rule_code": "C1",
+      "page_no": 1,
+      "x": 0.7903,
+      "y": 0.1847,
+      "note": "余额链起点"
+    },
+    {
+      "txn_id": 5,
+      "rule_code": "C1",
+      "page_no": 1,
+      "x": 0.7903,
+      "y": 0.31,
+      "note": "该笔充值后余额未回流"
+    },
+    {
+      "txn_id": 6,
+      "rule_code": "C2",
+      "page_no": 1,
+      "x": 0.6694,
+      "y": 0.35,
+      "note": "合计行比对"
+    }
+  ]
+}

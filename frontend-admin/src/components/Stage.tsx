@@ -14,6 +14,7 @@ interface Props {
   onSelect: (s: Selection) => void;
   onMove: (kind: 'meta' | 'table', id: string, rect: Rect) => void;
   onHint: (text: string) => void;
+  demoLines?: { field: string; text: string; confidence: number; rect: Rect }[];
 }
 
 type Drag =
@@ -191,6 +192,20 @@ export function Stage(p: Props) {
                 </div>
               );
             })}
+
+            {p.demoLines?.map((line, idx) => (
+              <div
+                key={`demo-${idx}`}
+                className={`box demo ${line.confidence < 0.8 ? 'low' : ''}`}
+                style={{
+                  left: `${line.rect.x * 100}%`, top: `${line.rect.y * 100}%`,
+                  width: `${line.rect.w * 100}%`, height: `${line.rect.h * 100}%`,
+                  pointerEvents: 'none',
+                }}
+              >
+                <span className="box-label">{line.field} {(line.confidence * 100).toFixed(0)}%</span>
+              </div>
+            ))}
 
             {drag?.mode === 'create' && (
               <div

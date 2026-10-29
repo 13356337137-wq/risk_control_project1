@@ -1,0 +1,265 @@
+{
+  "note": "示例数据。指标集当前版本共 40 项，此处展示五大组各 5 项；数值仅用于界面演示。",
+  "task_id": "T20261029002",
+  "carrier": "electronic",
+  "metric_set_version": 1,
+  "threshold_version": 1,
+  "groups": [
+    {
+      "key": "A",
+      "name": "收入",
+      "metrics": [
+        {
+          "code": "A01",
+          "name": "期间收入合计",
+          "value": "38418.42",
+          "unit": "元",
+          "note": "剔除后入账求和",
+          "caliber_version": 2
+        },
+        {
+          "code": "A02",
+          "name": "月均收入",
+          "value": "6403.07",
+          "unit": "元",
+          "note": "收入合计 ÷ 6 个月",
+          "caliber_version": 2
+        },
+        {
+          "code": "A03",
+          "name": "月收入中位数",
+          "value": "6400.00",
+          "unit": "元",
+          "note": "各月入账中位数",
+          "caliber_version": 2
+        },
+        {
+          "code": "A04",
+          "name": "收入稳定性",
+          "value": "0.18",
+          "unit": "",
+          "note": "各月入账标准差 ÷ 均值，越小越稳",
+          "caliber_version": 2
+        },
+        {
+          "code": "A05",
+          "name": "工资占比",
+          "value": "0.83",
+          "unit": "%",
+          "note": "工资类入账 ÷ 收入合计",
+          "caliber_version": 2
+        }
+      ]
+    },
+    {
+      "key": "B",
+      "name": "负债",
+      "metrics": [
+        {
+          "code": "B01",
+          "name": "月还款合计",
+          "value": "3966.67",
+          "unit": "元/月",
+          "note": "还款类出账按月均值",
+          "caliber_version": 2
+        },
+        {
+          "code": "B02",
+          "name": "债务收入比",
+          "value": "0.62",
+          "unit": "%",
+          "note": "月还款 ÷ 月均收入",
+          "caliber_version": 2
+        },
+        {
+          "code": "B03",
+          "name": "新增贷款笔数",
+          "value": "1",
+          "unit": "笔",
+          "note": "近六个月放款类入账",
+          "caliber_version": 2
+        },
+        {
+          "code": "B04",
+          "name": "网贷平台数",
+          "value": "2",
+          "unit": "个",
+          "note": "命中网贷词库的对手方去重",
+          "caliber_version": 2
+        },
+        {
+          "code": "B05",
+          "name": "小贷还款笔数",
+          "value": "3",
+          "unit": "笔",
+          "note": "小贷类出账笔数",
+          "caliber_version": 2
+        }
+      ]
+    },
+    {
+      "key": "C",
+      "name": "现金流",
+      "metrics": [
+        {
+          "code": "C01",
+          "name": "净流入",
+          "value": "27581.92",
+          "unit": "元",
+          "note": "收入合计 − 支出合计",
+          "caliber_version": 2
+        },
+        {
+          "code": "C02",
+          "name": "流入流出比",
+          "value": "3.55",
+          "unit": "倍",
+          "note": "入账合计 ÷ 出账合计",
+          "caliber_version": 2
+        },
+        {
+          "code": "C03",
+          "name": "日均余额",
+          "value": "31402.55",
+          "unit": "元",
+          "note": "日终余额算术平均",
+          "caliber_version": 2
+        },
+        {
+          "code": "C04",
+          "name": "余额波动率",
+          "value": "0.21",
+          "unit": "",
+          "note": "日终余额标准差 ÷ 均值",
+          "caliber_version": 2
+        },
+        {
+          "code": "C05",
+          "name": "期末余额趋势",
+          "value": "1280.40",
+          "unit": "元/月",
+          "note": "月末余额回归斜率",
+          "caliber_version": 2
+        }
+      ]
+    },
+    {
+      "key": "D",
+      "name": "行为",
+      "metrics": [
+        {
+          "code": "D01",
+          "name": "月度笔数波动",
+          "value": "0.33",
+          "unit": "",
+          "note": "各月笔数标准差 ÷ 均值",
+          "caliber_version": 2
+        },
+        {
+          "code": "D02",
+          "name": "夜间交易占比",
+          "value": "0.04",
+          "unit": "%",
+          "note": "22 点至次日 6 点笔数占比",
+          "caliber_version": 2
+        },
+        {
+          "code": "D03",
+          "name": "整数金额占比",
+          "value": "0.31",
+          "unit": "%",
+          "note": "整百或整千笔数占比",
+          "caliber_version": 2
+        },
+        {
+          "code": "D04",
+          "name": "大额笔数",
+          "value": "2",
+          "unit": "笔",
+          "note": "单笔超本行分位阈值",
+          "caliber_version": 2
+        },
+        {
+          "code": "D05",
+          "name": "单笔最大占比",
+          "value": "0.34",
+          "unit": "%",
+          "note": "最大单笔 ÷ 期间总额",
+          "caliber_version": 2
+        }
+      ]
+    },
+    {
+      "key": "E",
+      "name": "对手方",
+      "metrics": [
+        {
+          "code": "E01",
+          "name": "对手方集中度",
+          "value": "0.41",
+          "unit": "",
+          "note": "各对手方金额占比平方和",
+          "caliber_version": 2
+        },
+        {
+          "code": "E02",
+          "name": "前三大占比",
+          "value": "0.78",
+          "unit": "%",
+          "note": "前三大对手方金额占比",
+          "caliber_version": 2
+        },
+        {
+          "code": "E03",
+          "name": "关联方占比",
+          "value": "0.00",
+          "unit": "%",
+          "note": "关联对手方金额占比",
+          "caliber_version": 2
+        },
+        {
+          "code": "E04",
+          "name": "小贷命中率",
+          "value": "0.06",
+          "unit": "%",
+          "note": "[LOAN] 笔数 ÷ 总笔数",
+          "caliber_version": 2
+        },
+        {
+          "code": "E05",
+          "name": "涉赌命中率",
+          "value": "0.00",
+          "unit": "%",
+          "note": "[GAMBLING] 笔数 ÷ 总笔数",
+          "caliber_version": 2
+        }
+      ]
+    }
+  ],
+  "conclusions": [
+    {
+      "code": "DTI_HIGH",
+      "label": "月供收入比偏高",
+      "level": "warning",
+      "threshold": "0.50",
+      "value": "0.62",
+      "hint": "债务收入比超过默认阈值"
+    },
+    {
+      "code": "BALANCE_TIGHT",
+      "label": "流动性偏紧",
+      "level": "warning",
+      "threshold": "1.0",
+      "value": "0.88",
+      "hint": "近 30 天最低余额低于月供一倍"
+    },
+    {
+      "code": "LOAN_MULTI",
+      "label": "多头借贷迹象",
+      "level": "info",
+      "threshold": "3",
+      "value": "2",
+      "hint": "网贷平台数接近阈值"
+    }
+  ]
+}
