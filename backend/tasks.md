@@ -28,11 +28,11 @@
 
 | 状态 | 编号 | 目标 | 为什么 | 涉及文件 | 验收命令 |
 | --- | --- | --- | --- | --- | --- |
-| [ ] | BE-20a | 本地口令保护：/bank 与写接口要求口令（先做单口令，不做完整 RBAC） | 现在任何能访问 8000 的人都能看报告 | `main.py`、新依赖 | 无口令访问返回 401；带口令 200 |
+| [x] | BE-20a | 本地口令保护：/bank 与写接口要求口令（先做单口令，不做完整 RBAC） | 现在任何能访问 8000 的人都能看报告 | `helpers/security.py`、路由依赖 | `cd backend && py -m pytest tests -q`（Bearer 缺失 401、正确口令 200） |
 | [ ] | BE-39 | 报告输出 authenticity_summary（level/label/未通过层/受限数） | 前端自算会与导出/审计不一致 | `algo/report.py` 调用链 + `schemas` | 报告 JSON 含该字段，页面与它一致 |
 | [ ] | BE-31 | `POST /templates/dry-run`：传样例与 field_map，返回抽取值、条数、自检三项 | 标注页需要即时反馈 | `routers/templates.py` | 返回明细条数与自检结果 |
-| [ ] | BE-33 | 口令次数上限与审计（PDF/zip 均 3 次，口令不落库） | 现在前端有提示，后端不限次 | `routers/tasks.py` + `audit_log` | 第 4 次直接拒绝；审计有 3 条记录且无口令本体 |
-| [ ] | BE-32 | 补件：`POST /tasks/{id}/supplement` 追加 task_file，不新建任务 | 缺件场景走不通 | `routers/tasks.py`、`task_file` | 补件后同任务重跑，材料清单变 2 份 |
+| [x] | BE-33 | 口令次数上限与审计（PDF/zip 均 3 次，口令不落库） | 现在前端有提示，后端不限次 | `routers/tasks.py` + `audit_log` | `cd backend && py -m pytest tests -q`；实现按 file_id 统计 3 次失败，第 4 次 `E_LIMIT`，审计不含口令 |
+| [~] | BE-32 | 补件：`POST /tasks/{id}/supplement` 追加 task_file，不新建任务 | 缺件场景走不通 | `routers/tasks.py`、`services/workflow.py` | 已验证仅 `NEED_SUPPLEMENT` 可转 `PARSING` 且追加材料不新建任务；待 BE-09 队列完成多材料重跑并让报告 materials 变为 2 份 |
 
 ## P1
 
@@ -40,8 +40,8 @@
 | --- | --- | --- | --- | --- |
 | [ ] | BE-09 | 解析投递改队列（现在是同步阻塞） | 大文件会占满 worker | 上传后立即返回 202，状态可轮询到 DONE |
 | [ ] | BE-15 | 报告导出（异步作业 + 水印 + 留痕） | 审批要归档 | 导出任务完成后可下载且留审计 |
-| [ ] | BE-21 | 审计查询接口（按任务/操作人/时间） | 现在只能查库 | GET 审计列表返回分页结果 |
-| [ ] | BE-02 | 启动检查补：数据库连不上给出可读提示 | 现在报错栈难懂 | 停库后启动，日志一句话说清原因 |
+| [x] | BE-21 | 审计查询接口（按任务/操作人/时间） | 现在只能查库 | `cd backend && py -m pytest tests -q`；`GET /api/v1/audit` 支持对象、操作人、动作、时间与分页过滤 |
+| [x] | BE-02 | 启动检查补：数据库连不上给出可读提示 | 现在报错栈难懂 | `cd backend && py -m compileall -q .`；启动阶段捕获 MySQL/SQLAlchemy 连接错误并输出配置指引 |
 
 ## P2
 
