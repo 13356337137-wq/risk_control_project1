@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from 'react';
-import { getMetricDefinitions, getReport, getTransactions, listTasks, type MetricDef, type ReportPayload, type TaskRow, type TxnRow } from '../lib/api';
+import { getMetricDefinitions, getReport, getTransactions, getVerificationDefinitions, listTasks, type MetricDef, type ReportPayload, type TaskRow, type TxnRow } from '../lib/api';
 import { InsightSection } from './Charts';
 import { MetricExplain } from './MetricExplain';
+import { CheckTable } from './CheckTable';
 
 const LAYER_NAMES: Record<string, string> = { file: '载体层', content: '内容层', ledger: '账务层', external: '外部层' };
 
@@ -35,6 +36,7 @@ export function TaskList() {
   const [loading, setLoading] = useState(false);
   const [defs, setDefs] = useState<Record<string, MetricDef>>({});
   const [openMetric, setOpenMetric] = useState<string | null>(null);
+  const [vmethods, setVmethods] = useState<Record<string, string>>({});
 
   async function refresh() {
     setLoading(true); setError('');
@@ -43,6 +45,12 @@ export function TaskList() {
   }
 
   useEffect(() => { void refresh(); }, []);
+
+  useEffect(() => {
+    getVerificationDefinitions()
+      .then(d => setVmethods(Object.fromEntries(d.items.map(i => [i.code, i.method]))))
+      .catch(() => setVmethods({}));
+  }, []);
 
   useEffect(() => {
     getMetricDefinitions()
@@ -157,15 +165,21 @@ export function TaskList() {
 
             <details className="auth-detail">
               <summary>真实性校验明细（默认收起，点开看四层检查、受限说明与证据）</summary>
-              <h3>四层核验</h3>
-<table className="mini">
-              <thead><tr><th>层</th><th>状态</th><th>说明</th></tr></thead>
-              <tbody>
-                {report.layers.map(l => (
-                  <tr key={l.layer}><td>{LAYER_NAMES[l.layer] ?? l.layer}</td><td>{l.status}</td><td className="muted">{l.detail}</td></tr>
-                ))}
-              </tbody>
-            </table>
+              <h3>四层核验（点开任一检查点看「怎么验」和本次结果）</h3>
+              {report.layers.map(l => (
+                <div key={l.layer} className="layer-block">
+                  <div className="layer-head">
+                    <span className={'check-status ' + l.status}>{l.status}</span>
+                    <strong>{LAYER_NAMES[l.layer] ?? l.layer}</strong>
+                    <span className="muted">{l.detail}</span>
+                  </div>
+                  <CheckTable items={l.checks ?? []} methods={vmethods} />
+                </div>
+              ))}
+
+              <h3>识别自检（S0–S7）</h3>
+              <p className="muted">检查「系统有没有把这份文件读对」，与伪造判断分开看。</p>
+              <CheckTable items={report.self_check ?? []} methods={vmethods} />
 
 
             <h3>核验受限（{report.limitations.length}）</h3>

@@ -1,7 +1,9 @@
 export interface TaskRow { id: number; biz_no: string; status: string; carrier: string | null; created_at: string | null }
 export interface ReportPayload {
   carrier: string; verdict: string; verdict_reason: string;
-  limitations: string[]; layers: { layer: string; status: string; detail: string }[];
+  limitations: string[];
+  layers: { layer: string; status: string; detail: string; checks: ReportCheck[] }[];
+  self_check: ReportCheck[];
   metrics: { code: string; name: string; value: string | null; unit: string | null; note: string | null; caliber_version: number }[];
   metric_set_version: number; threshold_version: number;
   conclusions: { code: string; level: string; threshold: string; value: string }[];
@@ -40,6 +42,14 @@ export interface TxnRow {
 
 export async function getTransactions(taskId: number): Promise<TxnRow[]> {
   return json<TxnRow[]>(await fetch(`${BASE}/tasks/${taskId}/transactions?limit=2000`));
+}
+
+export interface ReportCheck { code: string; name: string; status: string; detail: string }
+
+export interface VerificationDef { code: string; layer: string; method: string }
+
+export async function getVerificationDefinitions(): Promise<{ items: VerificationDef[] }> {
+  return json<{ items: VerificationDef[] }>(await fetch(BASE + '/verification-definitions'));
 }
 
 export interface MetricDef {
