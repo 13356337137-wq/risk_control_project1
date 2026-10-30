@@ -71,6 +71,15 @@
 | [ ] | AL-21 | 模板命中：银行名 + 表头指纹 80%，未命中回退通用兜底并写 limitations | 命中/不命中各一例 |
 | [x] | AL-22 | 维护模板规范 `algorithm/template-spec.md`（结构/坐标/校验/命中/dry-run） | 规范与前端实现字段一致 |
 
+## PR#4 合入后的阻断项（PM/PD 登记，2026-10-30）
+
+| 状态 | 编号 | 任务 | 验收命令 |
+| --- | --- | --- | --- |
+| [x] | AL-23 | 报告补 `materials`（契约 2026-10-29 新增；算法只透传，来源为后端 task_file；空清单写 limitations） | 契约形状含 materials；`pytest` 176 passed；history/20261030-01.md |
+| [ ] | AL-24 | 证据坐标：无 bbox 不得写 (0,0)，改页级区域或 `coordinates_available=false` | 截图件样例证据不再落在页面左上角 |
+| [ ] | AL-25 | OCR 适配层：默认调行内服务，本地引擎作显式降级并写 limitations；或申请 F14 解冻 | 切换 provider 不改调用方；F14 状态与本文件一致 |
+| [ ] | AL-26 | 集成测试纳入默认执行：去掉 norecursedirs，改 marker + 依赖缺失时 skip | `pytest algorithm/` 能跑到 OCR 集成用例 |
+
 # 完成定义
 
 命令跑通、代码合并、history 已写、tasks 已勾。

@@ -90,6 +90,7 @@ def test_report_matches_contract_shape():
         "conclusions",
         "trend",
         "evidence",
+        "materials",
         "version",
     ]
     assert data["carrier"] == "electronic"
@@ -105,6 +106,27 @@ def test_report_matches_contract_shape():
     assert data["metric_set_version"] == 1
     assert data["threshold_version"] == 2
     assert data["version"] == 1
+
+
+def test_materials_passed_through_from_task_file():
+    from algorithm.algo.report import ReportMaterial
+
+    report = _report(materials=[
+        ReportMaterial(file_id=7, role="original", pages=2, sha256="a" * 64),
+        ReportMaterial(file_id=9, role="supplement", pages=1, sha256="b" * 64),
+    ])
+    data = json.loads(report.model_dump_json())
+    assert [m["role"] for m in data["materials"]] == ["original", "supplement"]
+    assert [m["file_id"] for m in data["materials"]] == [7, 9]
+    assert data["materials"][1]["pages"] == 1
+    assert not any("材料清单未提供" in item for item in data["limitations"])
+
+
+def test_materials_empty_is_declared_in_limitations():
+    report = _report()
+    data = json.loads(report.model_dump_json())
+    assert data["materials"] == []
+    assert any("材料清单未提供" in item for item in data["limitations"])
 
 
 def test_trend_uses_excluded_income_and_raw_expense():
