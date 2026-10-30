@@ -90,3 +90,15 @@ BE-01 保持未完成；本轮只实施以下子任务，连接池另行推进�
 - 数据库初始化权限：“不自行建表”与“缺表自动创建”的执行边界，需与数据组、PM/PD 确认。
 - 算法未交付时的状态停留和对外说明，实施任务接口前在 chat.md 提案；不增加 PENDING_ALGORITHM 枚举。
 - 部分旧任务仅支持 PDF 的描述与当前契约不一致；后续受理接口以 contract.md 为准。
+
+## v2 已落地（2026-10-30）
+
+| 状态 | 编号 | 任务 | 验收 |
+| --- | --- | --- | --- |
+| [x] | BE-34 | 11 张表模型 + 启动自动建库建表 | 启动后 SHOW TABLES 见 11 张 |
+| [x] | BE-35 | 受理接口 POST /tasks（加密件 E_ENCRYPT、模板选择、落库与审计） | 上传工行件返回 202 且 txn 191 行 |
+| [x] | BE-36 | 报告/明细/指标查询接口 | GET /reports/1 返回 13 字段 |
+| [x] | BE-37 | 模板增查与启用接口 | 建模板→启用→上传时 template_id 落库 |
+| [x] | BE-38 | 模板外推接口 POST /templates/infer（含加密件口令、可选存草稿） | 3 处标注返回 field_map 与 provenance |
+| [ ] | BE-39 | 报告输出 authenticity_summary（level/label/未通过层/受限数），避免前后端各算一套 | 报告 JSON 含该字段且与页面一致 |
+| [x] | BE-41 | 受理时执行识别自检并写入 task.check_result | 任务详情含 self_check 七项 |

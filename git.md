@@ -30,7 +30,7 @@ fix/be-retry-500         修 bug
 | --- | --- |
 | G1 | 开工第一件事：git pull origin dev |
 | G2 | 只在自己的 feat 分支改；不在 main、dev 上直接提交 |
-| G3 | 一轮对话结束提交一次，格式见第六节 |
+| G3 | 提交时机由 PM/PD 定，也可由执行 Agent 自行判断：大改动、关键文档落地、可运行/可部署版本 → 直接提交推送；零碎中间态 → 留在工作区 |
 | G4 | 提交前 git status 确认没有多余文件（密钥、真实数据、node_modules） |
 | G5 | 推自己的分支：git push origin feat/xxx，再开 PR 到 dev |
 | G6 | 每次动手前读 forbidden.md，命中冻结区不动 |

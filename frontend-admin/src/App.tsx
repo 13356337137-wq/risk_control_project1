@@ -1,18 +1,17 @@
 import { useState } from 'react';
 import { AnnotatePage } from './pages/Annotate';
-import { VerifyView } from './components/VerifyView';
-import { MetricsView } from './components/MetricsView';
+import { TaskList } from './components/TaskList';
+import { TemplateAdmin } from './components/TemplateAdmin';
 
-type Tab = 'annotate' | 'verify' | 'metrics' | 'list';
+type Tab = 'annotate' | 'tasks' | 'templates';
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('annotate');
+  const [tab, setTab] = useState<Tab>('tasks');
 
   const tabs: { key: Tab; label: string }[] = [
+    { key: 'tasks', label: '任务与报告' },
     { key: 'annotate', label: '模板标注' },
-    { key: 'verify', label: '真伪判定' },
-    { key: 'metrics', label: '指标报告' },
-    { key: 'list', label: '模板列表' },
+    { key: 'templates', label: '模板管理' },
   ];
 
   return (
@@ -25,23 +24,10 @@ export default function App() {
           ))}
         </div>
       </div>
+      {tab === 'tasks' && <TaskList />}
       {tab === 'annotate' && <AnnotatePage />}
-      {tab === 'verify' && <div className="result-wrap"><VerifyView /></div>}
-      {tab === 'metrics' && <div className="result-wrap"><MetricsView /></div>}
-      {tab === 'list' && <TemplateList />}
+      {tab === 'templates' && <TemplateAdmin />}
     </div>
   );
 }
 
-function TemplateList() {
-  return (
-    <div className="stage-wrap">
-      <div className="empty">
-        模板列表页尚未实现。<br />
-        需要后端 <span className="mono">GET /templates</span>、<span className="mono">POST /templates</span>、
-        <span className="mono">/publish</span> 就绪后接入。<br />
-        当前可用：模板标注（标注并导出 field_map）、真伪判定（示例）、指标报告（示例）。
-      </div>
-    </div>
-  );
-}
