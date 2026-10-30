@@ -69,3 +69,16 @@ desktop.ini
 *.db
 *.sqlite
 *.sqlite3
+
+# ===== 客户材料与真实数据（绝不入库）=====
+/*.zip
+/*.pdf
+/*.jpg
+/*.jpeg
+/*.png
+/*.xlsx
+/*.csv
+inputs/raw/
+inputs/samples/*.pdf
+inputs/samples/*.jpg
+inputs/samples/*.png

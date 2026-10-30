@@ -23,24 +23,36 @@ async function loadPdfjs(): Promise<PdfjsModule> {
   return pdfjsPromise;
 }
 
-export async function openSampleFile(file: File): Promise<SamplePage> {
+export class PdfPasswordError extends Error {
+  readonly kind: 'needed' | 'wrong';
+  constructor(kind: 'needed' | 'wrong') {
+    super(kind === 'needed' ? 'PDF 需要打开口令' : 'PDF 口令不正确');
+    this.name = 'PdfPasswordError';
+    this.kind = kind;
+  }
+}
+
+export async function openSampleFile(file: File, password?: string): Promise<SamplePage> {
   const name = file.name.toLowerCase();
-  if (file.type === 'application/pdf' || name.endsWith('.pdf')) return openPdf(file);
+  if (file.type === 'application/pdf' || name.endsWith('.pdf')) return openPdf(file, password);
   if (/^image\/(jpeg|png)$/.test(file.type) || /\.(jpe?g|png)$/.test(name)) return openImage(file);
   throw new Error('仅支持 PDF、JPG、JPEG、PNG 文件');
 }
 
-async function openPdf(file: File): Promise<SamplePage> {
+async function openPdf(file: File, password?: string): Promise<SamplePage> {
   const pdfjs = await loadPdfjs().catch(() => {
     throw new Error('PDF 解析组件加载失败，请刷新页面重试');
   });
   const buffer = await file.arrayBuffer();
   let doc: PDFDocumentProxy;
   try {
-    doc = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
+    doc = await pdfjs.getDocument({ data: new Uint8Array(buffer), password }).promise;
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
-    if (/password/i.test(raw)) throw new Error('该 PDF 已加密，请先用去口令的版本标注样本');
+    const errName = err instanceof Error ? err.name : '';
+    if (errName === 'PasswordException' || /password/i.test(raw)) {
+      throw new PdfPasswordError(password ? 'wrong' : 'needed');
+    }
     throw new Error(`PDF 无法打开：${raw}`);
   }
 

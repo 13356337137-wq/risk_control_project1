@@ -7,12 +7,18 @@ import {
   clearDraft, createEmpty, downloadText, hasBlockingError,
   loadDraft, saveDraft, serialize, uid, validate,
 } from '../lib/template';
-import { openSampleFile } from '../lib/pdf';
+import { PdfPasswordError, openSampleFile } from '../lib/pdf';
+import { ArchiveError, extractStatement, isArchive } from '../lib/archive';
+import { PasswordDialog, type PasswordRequest } from '../components/PasswordDialog';
 import { createDemoPage } from '../lib/sample';
 import { ocrDemo, LOW_CONF, type DemoLine } from '../lib/demo';
 import type { FieldMapV1, Issue, Rect, SamplePage, Selection, Tool } from '../lib/types';
 
 type Notice = { level: 'info' | 'error' | 'warning'; text: string } | null;
+type SpecialLevel = 'info' | 'warn' | 'error';
+interface SpecialEvent { time: string; name: string; stage: string; result: string; level: SpecialLevel }
+interface Pending { file: File; kind: 'zip' | 'pdf'; target: string; attempts: number; wrong: boolean }
+const MAX_PW_ATTEMPTS = 3;
 
 export function AnnotatePage() {
   const [map, setMap] = useState<FieldMapV1>(() => loadDraft() ?? createEmpty());
@@ -24,6 +30,8 @@ export function AnnotatePage() {
   const [sel, setSel] = useState<Selection>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [demoLines, setDemoLines] = useState<DemoLine[] | null>(null);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [events, setEvents] = useState<SpecialEvent[]>([]);
 
   const pageCount = sample?.pageCount ?? 1;
   const issues: Issue[] = useMemo(() => validate(map, pageCount), [map, pageCount]);
@@ -44,23 +52,123 @@ export function AnnotatePage() {
 
   function hint(text: string) { setNotice({ level: 'info', text }); }
 
+  function logEvent(name: string, stage: string, result: string, level: SpecialLevel) {
+    const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    setEvents(prev => [{ time, name, stage, result, level }, ...prev].slice(0, 12));
+  }
+
+  async function openPage(file: File, password?: string) {
+    const opened = await openSampleFile(file, password);
+    setSample(opened);
+    setSampleName(file.name);
+    setPage(1);
+    setSel(null);
+    setMap(prev => ({
+      ...prev,
+      page_size: { w: Math.round(opened.width * 100) / 100, h: Math.round(opened.height * 100) / 100 },
+      meta: { ...prev.meta, sample_name: file.name },
+    }));
+    setNotice({ level: 'info', text: `已载入 ${file.name}（${opened.pageCount} 页）。样例只在本机读取，不会上传。` });
+    logEvent(file.name, '打开材料', `${opened.pageCount} 页，可标注`, 'info');
+  }
+
+  /** 收件：压缩包先解开（可能要口令），再按 PDF/图片打开。 */
   async function loadFile(file: File) {
+    logEvent(file.name, '收到材料', `${(file.size / 1024).toFixed(1)} KB`, 'info');
+    if (isArchive(file)) {
+      try {
+        const result = await extractStatement(file);
+        if (result.status === 'need-password') {
+          logEvent(file.name, '识别为加密压缩包', '需要客户提供口令', 'warn');
+          setPending({ file, kind: 'zip', target: result.name, attempts: 0, wrong: false });
+          return;
+        }
+        if (result.status === 'wrong-password') {
+          logEvent(file.name, '压缩包口令', '口令不正确', 'error');
+          return;
+        }
+        logEvent(file.name, '压缩包已解开', result.others > 0 ? `取首个材料，另有 ${result.others} 份未受理` : '单份材料', 'info');
+        const inner = new File([result.blob], result.name, { type: result.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/*' });
+        await openPage(inner);
+      } catch (err) {
+        const msg = err instanceof ArchiveError ? err.message : err instanceof Error ? err.message : String(err);
+        setNotice({ level: 'error', text: msg });
+        logEvent(file.name, '压缩包处理', msg, 'error');
+      }
+      return;
+    }
     try {
-      const opened = await openSampleFile(file);
-      setSample(opened);
-      setSampleName(file.name);
-      setPage(1);
-      setSel(null);
-      setMap(prev => ({
-        ...prev,
-        page_size: { w: Math.round(opened.width * 100) / 100, h: Math.round(opened.height * 100) / 100 },
-        meta: { ...prev.meta, sample_name: file.name },
-      }));
-      setNotice({ level: 'info', text: `已载入 ${file.name}（${opened.pageCount} 页）。样例只在本机读取，不会上传。` });
+      await openPage(file);
     } catch (err) {
+      if (err instanceof PdfPasswordError) {
+        logEvent(file.name, 'PDF 需要口令', err.kind === 'needed' ? '等待输入' : '口令不正确', err.kind === 'needed' ? 'warn' : 'error');
+        setPending(prev => prev
+          ? { ...prev, file, kind: 'pdf', target: file.name, wrong: err.kind === 'wrong' }
+          : { file, kind: 'pdf', target: file.name, attempts: 0, wrong: false });
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       setNotice({ level: 'error', text: msg });
+      logEvent(file.name, '打开材料', msg, 'error');
     }
+  }
+
+  async function submitPassword(password: string) {
+    if (!pending) return;
+    const attempts = pending.attempts + 1;
+    if (pending.kind === 'zip') {
+      try {
+        const result = await extractStatement(pending.file, password);
+        if (result.status === 'wrong-password') {
+          logEvent(pending.target, `压缩包口令第 ${attempts} 次`, '口令不正确', 'error');
+          if (attempts >= MAX_PW_ATTEMPTS) {
+            setPending(null);
+            setNotice({ level: 'error', text: '口令错误已达 3 次，已停止尝试。请让客户重新导出或告知口令后再提交。' });
+            logEvent(pending.target, '放弃解包', '连续 3 次口令错误', 'error');
+            return;
+          }
+          setPending({ ...pending, attempts, wrong: true });
+          return;
+        }
+        if (result.status === 'ok') {
+          setPending(null);
+          logEvent(pending.target, '压缩包口令通过', `第 ${attempts} 次成功`, 'info');
+          const inner = new File([result.blob], result.name, { type: result.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/*' });
+          await openPage(inner);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setNotice({ level: 'error', text: msg });
+        logEvent(pending.target, '压缩包解包', msg, 'error');
+        setPending(null);
+      }
+      return;
+    }
+    try {
+      await openPage(pending.file, password);
+      setPending(null);
+      logEvent(pending.target, 'PDF 口令通过', `第 ${attempts} 次成功`, 'info');
+    } catch (err) {
+      if (err instanceof PdfPasswordError && err.kind === 'wrong') {
+        logEvent(pending.target, `PDF 口令第 ${attempts} 次`, '口令不正确', 'error');
+        if (attempts >= MAX_PW_ATTEMPTS) {
+          setPending(null);
+          setNotice({ level: 'error', text: '口令错误已达 3 次，已停止尝试。请让客户提供正确口令或改用去口令版本。' });
+          return;
+        }
+        setPending({ ...pending, attempts, wrong: true });
+        return;
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      setNotice({ level: 'error', text: msg });
+      logEvent(pending.target, '打开材料', msg, 'error');
+      setPending(null);
+    }
+  }
+
+  function cancelPassword() {
+    if (pending) logEvent(pending.target, '取消输入口令', '本次不打开该材料', 'warn');
+    setPending(null);
   }
 
   function loadDemo() {
@@ -270,6 +378,21 @@ export function AnnotatePage() {
               抽取是否正确要等 <span className="mono">/templates/dry-run</span> 实现后才能验。
             </p>
           </div>
+          <section className="events">
+            <div className="events-head">特殊情况检测</div>
+            {events.length === 0 && <p className="muted small">还没有特殊情况。载入一份带口令的材料就会出现记录。</p>}
+            <ul>
+              {events.map((e, i) => (
+                <li key={i} className={e.level}>
+                  <span className="mono">{e.time}</span>
+                  <b>{e.stage}</b>
+                  <span className="muted">{e.result}</span>
+                  <span className="ev-name">{e.name}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
           <ValidationPanel
             issues={issues}
             onLocate={issue => {
@@ -284,8 +407,22 @@ export function AnnotatePage() {
       </div>
 
       <div className="muted" style={{ padding: '6px 18px', background: '#fff', borderTop: '1px solid #e2e8f0' }}>
-        样例：{sampleName || '未载入'} · 草稿自动保存在本机浏览器
+        样例：{sampleName || '未载入'} · 草稿自动保存在本机浏览器 · 口令只在本机内存中使用
       </div>
+
+      {pending && (
+        <PasswordDialog
+          request={{
+            target: pending.target,
+            kind: pending.kind,
+            wrong: pending.wrong,
+            attempts: pending.attempts,
+            maxAttempts: MAX_PW_ATTEMPTS,
+          } as PasswordRequest}
+          onSubmit={pw => { void submitPassword(pw); }}
+          onCancel={cancelPassword}
+        />
+      )}
     </div>
   );
 }

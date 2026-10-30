@@ -91,3 +91,22 @@ table.mini th { background: #f8fafc; color: #475569; font-weight: 600; }
 .conclusion.info { border-color: #bfdbfe; background: #eff6ff; }
 .c-title { font-weight: 600; font-size: 14px; }
 .c-meta { font-size: 12px; color: #64748b; margin-top: 4px; line-height: 1.6; }
+/* 口令对话框 */
+.modal-mask { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal { width: 420px; max-width: calc(100vw - 32px); background: #fff; border-radius: 12px; padding: 20px 22px; box-shadow: 0 20px 60px rgba(15, 23, 42, .3); }
+.modal h3 { margin: 0 0 6px; font-size: 16px; }
+.modal .hint-box { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; line-height: 1.6; }
+.modal .error-box { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
+.modal .field { display: block; font-size: 13px; color: #334155; margin: 10px 0 4px; }
+.modal .field input { width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.small { font-size: 12px; }
+
+/* 特殊情况事件 */
+.events { border-top: 1px solid #e2e8f0; padding: 10px 16px; max-height: 30%; overflow: auto; }
+.events-head { font-size: 12.5px; font-weight: 600; color: #475569; margin-bottom: 6px; }
+.events ul { list-style: none; margin: 0; padding: 0; }
+.events li { display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px; padding: 4px 0; border-bottom: 1px dashed #eef2f7; }
+.events li.error b { color: #b91c1c; }
+.events li.warn b { color: #b45309; }
+.events .ev-name { color: #94a3b8; font-size: 11px; width: 100%; overflow-wrap: anywhere; }
