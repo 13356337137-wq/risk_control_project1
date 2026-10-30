@@ -1,4 +1,5 @@
 import json
+from algorithm.algo.metrics import METRIC_SET_VERSION
 from datetime import date
 from decimal import Decimal
 
@@ -103,7 +104,7 @@ def test_report_matches_contract_shape():
         "external",
     ]
     assert len(data["metrics"]) == 40
-    assert data["metric_set_version"] == 1
+    assert data["metric_set_version"] == METRIC_SET_VERSION
     assert data["threshold_version"] == 2
     assert data["version"] == 1
 
@@ -151,7 +152,10 @@ def test_default_threshold_conclusions():
     assert dti.threshold == "0.5"
     assert dti.value == "0.6"
     lowest = next(item for item in report.conclusions if item.code == "LOW_BALANCE")
-    assert lowest.threshold == "6000"
+    from algorithm.algo.metrics import compute_metrics
+
+    expected = compute_metrics(_history()).by_code("B01").value
+    assert Decimal(lowest.threshold) == expected
     assert lowest.value == "100"
     assert any("B01 月还款近似月供" in note for note in report.limitations)
 

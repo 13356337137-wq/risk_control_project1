@@ -10,7 +10,7 @@ from ..ocr.models import Transaction
 from .exclusions import ExclusionResult, analyze_exclusions, normalize_name
 from .hits import HitResult
 
-METRIC_SET_VERSION = 1
+METRIC_SET_VERSION = 2  # v2：月均/月供按实际覆盖的自然月折算（原按出现月份数）
 SAME_DAY_TOLERANCE = Decimal("0.2")
 
 _SALARY = ("工资", "代发")
@@ -100,6 +100,10 @@ class MetricSet(BaseModel):
     period_start: date | None = None
     period_end: date | None = None
     coverage_months: int | None = None
+    coverage_start: date | None = None
+    coverage_end: date | None = None
+    coverage_days: int | None = None
+    coverage_months_exact: float | None = None
     metrics: list[MetricValue] = Field(default_factory=list)
     trend: list[MonthlyFlow] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
@@ -172,6 +176,21 @@ def _parse_date(text: str | None) -> date | None:
 
 def _month_key(value: date) -> tuple[int, int]:
     return value.year, value.month
+
+
+def _exact_months(start: date, end: date) -> float:
+    """按自然月比例累加：整月计 1，首末不完整按当月天数折算。"""
+    import calendar
+    from datetime import timedelta
+
+    total = 0.0
+    cur = start
+    while cur <= end:
+        days_in_month = calendar.monthrange(cur.year, cur.month)[1]
+        seg_end = min(end, date(cur.year, cur.month, days_in_month))
+        total += ((seg_end - cur).days + 1) / days_in_month
+        cur = seg_end + timedelta(days=1)
+    return round(total, 4)
 
 
 def _months(start: date, end: date) -> list[tuple[int, int]]:
@@ -272,7 +291,18 @@ def compute_metrics(
     end = period_end or (max(known) if known else None)
     months = _months(start, end) if start and end else []
     coverage = len(months) if months else None
+    coverage_days = (end - start).days + 1 if start and end else None
+    coverage_exact = _exact_months(start, end) if start and end else None
+    coverage_clamped = False
+    if coverage_exact is not None and coverage_exact < 1:
+        # 业务口径：覆盖不足 1 个整月时按月均折算会失真，统一按 1 个月计并写明假设
+        coverage_exact = 1.0
+        coverage_clamped = True
     missing_dates = len(known) < len(transactions)
+    missing_direction = sum(
+        1 for txn in transactions if txn.direction not in ("in", "out") and txn.amount is not None
+    )
+    inflow_count = sum(1 for txn in transactions if txn.direction == "in" and txn.amount is not None)
 
     kept = set(exclusions.kept_indices)
     inflow_raw = [txn.amount for txn in transactions if txn.direction == "in" and txn.amount is not None]
@@ -315,14 +345,20 @@ def compute_metrics(
         values[code] = (value, note)
 
     # A 组
-    if transactions:
-        put("A01", _money(income), "剔除六类后的入账合计")
-    else:
+    income_unknown = bool(transactions) and inflow_count == 0 and missing_direction > 0
+    if not transactions:
         put("A01", None, "无交易明细")
-    if coverage:
-        put("A02", _money(income / Decimal(coverage)), "A01 ÷ 覆盖月数")
+    elif income_unknown:
+        put("A01", None, f"未识别到入账方向（{missing_direction} 笔方向缺失），收入类指标不可算")
     else:
-        put("A02", None, "缺交易日期，无法确定覆盖月数")
+        put("A01", _money(income), "剔除六类后的入账合计")
+    if coverage_exact and not income_unknown:
+        put("A02", _money(income / Decimal(str(coverage_exact))),
+            f"A01 ÷ 实际覆盖 {coverage_exact} 个整月（{coverage_days} 天，首末月按当月天数折算）")
+    elif income_unknown:
+        put("A02", None, "A01 不可算（入账方向缺失）")
+    else:
+        put("A02", None, "缺交易日期，无法确定覆盖期间")
     if months:
         monthly_values = [monthly_income[key] for key in months]
         put("A03", _money(_median(monthly_values)), "覆盖月内各月入账中位数（空月计 0）")
@@ -389,13 +425,14 @@ def compute_metrics(
         ),
         Decimal("0"),
     )
-    if coverage:
-        b01 = repay_total / Decimal(coverage)
-        put("B01", _money(b01), "还款/分期/贷款出账合计 ÷ 覆盖月数")
+    if coverage_exact:
+        b01 = repay_total / Decimal(str(coverage_exact))
+        put("B01", _money(b01), f"还款/分期/贷款出账合计 ÷ 实际覆盖 {coverage_exact} 个整月")
         if income:
-            put("B02", _ratio(b01 / (income / Decimal(coverage))), "B01 ÷ A02")
+            put("B02", _ratio(b01 / (income / Decimal(str(coverage_exact)))),
+                "B01 ÷ A02" + ("（未识别到还款类出账，不代表无负债）" if repay_total == 0 else ""))
         else:
-            put("B02", None, "A02 为 0")
+            put("B02", None, "A02 为 0 或不可算")
     else:
         put("B01", None, "缺交易日期，无法确定覆盖月数")
         put("B02", None, "缺交易日期，无法确定覆盖月数")
@@ -730,10 +767,21 @@ def compute_metrics(
         for year, month in months
     ]
 
+    if coverage_days:
+        notes.append(
+            f"月均类指标按实际覆盖 {coverage_exact} 个整月折算（{coverage_days} 天，首末月按比例）；"
+            f"首末月不完整，与按整月计数会有差异"
+        )
+    if coverage_clamped:
+        notes.append("明细覆盖不足 1 个整月，月均/月供按 1 个月折算，结果可能偏高，请以更长期间材料复核")
     return MetricSet(
         period_start=start,
         period_end=end,
         coverage_months=coverage,
+        coverage_start=start,
+        coverage_end=end,
+        coverage_days=coverage_days,
+        coverage_months_exact=coverage_exact,
         metrics=metrics,
         trend=trend,
         notes=notes,

@@ -51,7 +51,7 @@ def _compute(**kwargs):
 
 def test_all_forty_metrics_present_and_versioned():
     result = _compute()
-    assert result.metric_set_version == METRIC_SET_VERSION == 1
+    assert result.metric_set_version == METRIC_SET_VERSION
     assert len(result.metrics) == 40
     assert [metric.code for metric in result.metrics] == [
         *(f"A{index:02d}" for index in range(1, 9)),

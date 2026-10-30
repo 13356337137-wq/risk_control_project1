@@ -120,7 +120,7 @@ file_layer → content_layer → ledger_layer → external_layer
 
 # 指标层当前口径
 
-- `METRIC_SET_VERSION = 1`、单项 `caliber_version = 1`；两者只增不改。
+- `METRIC_SET_VERSION = 2（v2 起月均类按实际覆盖自然月折算）`、单项 `caliber_version = 1`；两者只增不改。
 - 40 项固定输出，缺输入返回 `value = null` 并在 `note` 写明原因，不填 0、不估算。
 - 百分比类指标统一取 0–1 比例（与 mock 的 DTI 0.42 / 阈值 0.5 一致）；单位仍写「百分比」。
 - 统计口径：标准差用总体标准差；月均收入 = 剔除后入账 ÷ 覆盖自然月数；空月计 0；趋势用月度值对月份序号回归。
