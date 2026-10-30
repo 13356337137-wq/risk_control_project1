@@ -1,0 +1,122 @@
+{
+ "schema_version": 1,
+ "bank_code": "CMB",
+ "page_size": {
+  "w": 595.3,
+  "h": 841.9
+ },
+ "match_rule": {
+  "bank_name_keywords": [
+   "招商银行"
+  ],
+  "header_fingerprint": [
+   "记账日期",
+   "货币",
+   "交易金额",
+   "联机余额",
+   "交易摘要",
+   "对手信息"
+  ]
+ },
+ "meta_boxes": [
+  {
+   "id": "m1",
+   "field": "account_name",
+   "page": 1,
+   "rect": {
+    "x": 0.1095,
+    "y": 0.1406,
+    "w": 0.2016,
+    "h": 0.0166
+   }
+  },
+  {
+   "id": "m2",
+   "field": "account_no",
+   "page": 1,
+   "rect": {
+    "x": 0.4385,
+    "y": 0.1406,
+    "w": 0.252,
+    "h": 0.0166
+   }
+  },
+  {
+   "id": "m3",
+   "field": "period",
+   "page": 1,
+   "rect": {
+    "x": 0.4013,
+    "y": 0.0961,
+    "w": 0.2016,
+    "h": 0.0166
+   }
+  },
+  {
+   "id": "m4",
+   "field": "branch",
+   "page": 1,
+   "rect": {
+    "x": 0.4385,
+    "y": 0.1852,
+    "w": 0.2688,
+    "h": 0.0166
+   }
+  }
+ ],
+ "tables": [
+  {
+   "id": "t1",
+   "page": 1,
+   "area": {
+    "x": 0.0605,
+    "y": 0.3563,
+    "w": 0.8786,
+    "h": 0.5939
+   },
+   "header_y": 0.3599,
+   "columns": [
+    {
+     "field": "txn_date",
+     "x": 0.0605,
+     "w": 0.1008
+    },
+    {
+     "field": "currency",
+     "x": 0.1663,
+     "w": 0.084
+    },
+    {
+     "field": "amount",
+     "x": 0.2614,
+     "w": 0.131
+    },
+    {
+     "field": "balance",
+     "x": 0.3923,
+     "w": 0.1109
+    },
+    {
+     "field": "summary",
+     "x": 0.5053,
+     "w": 0.1764
+    },
+    {
+     "field": "counterparty",
+     "x": 0.6918,
+     "w": 0.2469
+    }
+   ]
+  }
+ ],
+ "custom_fields": [
+  {
+   "code": "verify_code",
+   "label": "验真码"
+  }
+ ],
+ "meta": {
+  "created_at": "2026-10-30T00:00:00+08:00",
+  "sample_name": "cmb_statement.pdf"
+ }
+}
