@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { getReport, getTransactions, listTasks, type ReportPayload, type TaskRow, type TxnRow } from '../lib/api';
+import { Fragment, useEffect, useState } from 'react';
+import { getMetricDefinitions, getReport, getTransactions, listTasks, type MetricDef, type ReportPayload, type TaskRow, type TxnRow } from '../lib/api';
 import { InsightSection } from './Charts';
+import { MetricExplain } from './MetricExplain';
 
 const LAYER_NAMES: Record<string, string> = { file: '载体层', content: '内容层', ledger: '账务层', external: '外部层' };
 
@@ -32,6 +33,8 @@ export function TaskList() {
   const [txns, setTxns] = useState<TxnRow[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [defs, setDefs] = useState<Record<string, MetricDef>>({});
+  const [openMetric, setOpenMetric] = useState<string | null>(null);
 
   async function refresh() {
     setLoading(true); setError('');
@@ -40,6 +43,12 @@ export function TaskList() {
   }
 
   useEffect(() => { void refresh(); }, []);
+
+  useEffect(() => {
+    getMetricDefinitions()
+      .then(d => setDefs(Object.fromEntries(d.items.map(i => [i.code, i]))))
+      .catch(() => setDefs({}));
+  }, []);
 
   async function open(id: number) {
     setSelected(id); setReport(null); setTxns([]); setError('');
@@ -118,15 +127,30 @@ export function TaskList() {
             <InsightSection txns={txns} />
 
             <h3>指标（{report.metrics.filter(m => m.value !== null).length}/{report.metrics.length} 有值）</h3>
-            <table className="mini">
-              <thead><tr><th>编码</th><th>指标</th><th>值</th><th>单位</th><th>口径说明</th></tr></thead>
+            <p className="muted">点任意一行展开：看这条指标怎么算、用了哪些输入、按原始数据画出来的图。</p>
+            <table className="mini metric-table">
+              <thead><tr><th></th><th>编码</th><th>指标</th><th>值</th><th>单位</th><th>口径说明</th></tr></thead>
               <tbody>
                 {report.metrics.map(m => (
-                  <tr key={m.code}>
-                    <td className="mono">{m.code}</td><td>{m.name}</td>
-                    <td className="num">{m.value ?? '不可算'}</td><td>{m.unit ?? '—'}</td>
-                    <td className="muted">{m.note ?? '—'}</td>
-                  </tr>
+                  <Fragment key={m.code}>
+                    <tr
+                      className={'metric-row' + (openMetric === m.code ? ' open' : '')}
+                      onClick={() => setOpenMetric(openMetric === m.code ? null : m.code)}
+                    >
+                      <td className="caret">{openMetric === m.code ? '▾' : '▸'}</td>
+                      <td className="mono">{m.code}</td><td>{m.name}</td>
+                      <td className="num">{m.value ?? '不可算'}</td><td>{m.unit ?? '—'}</td>
+                      <td className="muted">{m.note ?? '—'}</td>
+                    </tr>
+                    {openMetric === m.code && (
+                      <tr className="metric-detail-row">
+                        <td />
+                        <td colSpan={5}>
+                          <MetricExplain metric={m} def={defs[m.code]} trend={report.trend ?? []} txns={txns} metricSetVersion={report.metric_set_version} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

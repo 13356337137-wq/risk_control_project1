@@ -167,3 +167,19 @@ table.mini th { background: #f8fafc; color: #475569; font-weight: 600; }
 .chip.unavailable { border-color: #dcdff0; color: #5b6bb5; background: #f7f8fd; }
 .auth-detail { margin-top: 14px; border-top: 1px dashed #e6e9ef; padding-top: 10px; }
 .auth-detail > summary { cursor: pointer; font-size: 13px; color: #2f6fb3; }
+
+/* 指标展开：计算规则与可视化 */
+.metric-table .metric-row { cursor: pointer; }
+.metric-table .metric-row:hover { background: #f5f8fd; }
+.metric-table .metric-row.open { background: #eef4ff; }
+.metric-table .caret { color: #7a879b; width: 18px; font-size: 11px; }
+.metric-detail-row > td { background: #fbfcfe; padding: 12px 14px; border-top: 1px solid #e3e9f3; }
+.metric-explain { display: flex; flex-direction: column; gap: 8px; }
+.metric-explain h4 { margin: 6px 0 2px; font-size: 13px; color: #33415c; }
+.me-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 22px; }
+.me-k { display: block; font-size: 12px; color: #7a879b; margin-bottom: 3px; }
+.me-v { font-size: 13px; color: #22314f; }
+.me-formula { display: inline-block; font-size: 13px; background: #eef2f9; border: 1px solid #dde5f2; border-radius: 4px; padding: 4px 8px; color: #1f3b70; }
+.me-note { margin: 2px 0; font-size: 12px; color: #4a5870; }
+.me-warn { margin: 2px 0; font-size: 12px; color: #a35b00; background: #fff7e8; border: 1px solid #f0d9b0; border-radius: 4px; padding: 6px 8px; }
+.metric-svg { width: 100%; max-width: 620px; height: auto; display: block; margin-top: 4px; }
