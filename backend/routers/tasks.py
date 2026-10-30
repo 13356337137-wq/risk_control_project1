@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from db.models import AuditLog, FileObj, MetricValue, Report, Task, TaskFile, Txn
 from db.session import get_session
+from algorithm.algo.preread import run_preread
 from services.analysis import EncryptedFile, run_analysis
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -50,8 +51,20 @@ def create_task(
             template_row = row
             template = {"bank_code": row.bank_code, "version": row.version, "field_map": row.field_map}
 
+    # 预读取：不看模板，先判断「是不是流水」，并抓基础信息
+    preread = run_preread(data, password=password)
+    if preread.verdict == "reject":
+        db.add(AuditLog(action="preread_rejected", object_type="file", object_id=0,
+                        detail=f"not_statement; rows={preread.txn_like_rows}; reasons={'；'.join(preread.reasons)[:180]}"))
+        db.commit()
+        raise HTTPException(422, detail={
+            "code": "E_NOT_STATEMENT",
+            "message": "这不是银行流水/对账单文件" + ("：" + "；".join(preread.reasons[:3]) if preread.reasons else ""),
+            "preread": preread.to_dict(),
+        })
+
     try:
-        result = run_analysis(data, password=password, template=template)
+        result = run_analysis(data, password=password, template=template, preread=preread)
     except EncryptedFile as exc:
         raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
     except Exception as exc:  # 解析失败也要留任务与审计
@@ -83,7 +96,11 @@ def create_task(
         template_id=template_row.id if template_row else None,
         template_version=template_row.version if template_row else None,
         period_start=period_start, period_end=period_end,
-        check_result={"warnings": result["warnings"], "self_check": result.get("self_check")},
+        check_result={
+            "warnings": result["warnings"],
+            "self_check": result.get("self_check"),
+            "preread": result.get("preread"),
+        },
         finished_at=datetime.now(),
     )
     db.add(task); db.flush()
@@ -116,7 +133,8 @@ def create_task(
     db.commit(); db.refresh(task)
 
     return {"task_id": task.id, "biz_no": task.biz_no, "status": task.status,
-            "carrier": task.carrier, "txn_count": result["txn_count"]}
+            "carrier": task.carrier, "txn_count": result["txn_count"],
+            "preread": result.get("preread")}
 
 
 @router.get("")
@@ -137,5 +155,6 @@ def get_task(task_id: int, db: Session = Depends(get_session)):
     return {"id": task.id, "biz_no": task.biz_no, "status": task.status, "carrier": task.carrier,
             "period_start": task.period_start, "period_end": task.period_end,
             "failure_code": task.failure_code,
+            "check_result": task.check_result,
             "created_at": task.created_at.isoformat() if task.created_at else None}
 

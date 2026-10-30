@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
-import { getMetricDefinitions, getReport, getTransactions, getVerificationDefinitions, listTasks, type MetricDef, type ReportPayload, type TaskRow, type TxnRow } from '../lib/api';
+import { getMetricDefinitions, getReport, getTask, getTransactions, getVerificationDefinitions, listTasks, type MetricDef, type PrereadInfo, type ReportPayload, type TaskRow, type TxnRow } from '../lib/api';
 import { InsightSection } from './Charts';
 import { MetricExplain } from './MetricExplain';
 import { CheckTable } from './CheckTable';
@@ -37,6 +37,7 @@ export function TaskList() {
   const [defs, setDefs] = useState<Record<string, MetricDef>>({});
   const [openMetric, setOpenMetric] = useState<string | null>(null);
   const [vmethods, setVmethods] = useState<Record<string, string>>({});
+  const [preread, setPreread] = useState<PrereadInfo | null>(null);
 
   async function refresh() {
     setLoading(true); setError('');
@@ -61,8 +62,8 @@ export function TaskList() {
   async function open(id: number) {
     setSelected(id); setReport(null); setTxns([]); setError('');
     try {
-      const [rep, rows] = await Promise.all([getReport(id), getTransactions(id)]);
-      setReport(rep); setTxns(rows);
+      const [rep, rows, task] = await Promise.all([getReport(id), getTransactions(id), getTask(id)]);
+      setReport(rep); setTxns(rows); setPreread(task.check_result?.preread ?? null);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }
 
@@ -119,6 +120,30 @@ export function TaskList() {
                 </div>
               );
             })()}
+
+            {preread && (
+              <div className={"preread-card " + preread.verdict}>
+                <div className="preread-head">
+                  <span className="preread-title">预读取（不看模板，只读全文）</span>
+                  <span className={'check-status ' + (preread.verdict === 'accept' ? 'pass' : preread.verdict === 'reject' ? 'fail' : 'limited')}>
+                    {preread.verdict === 'accept' ? '判定为流水' : preread.verdict === 'reject' ? '判定非流水' : '需人工确认'}
+                  </span>
+                  <span className="muted">置信度 {preread.confidence.toFixed(2)}</span>
+                </div>
+                <div className="preread-grid">
+                  <div><span className="me-k">银行</span><span className="me-v">{preread.bank_name ?? '未识别'}（{preread.bank_code ?? '—'}）</span></div>
+                  <div><span className="me-k">账户 / 户名</span><span className="me-v">{preread.account_masked ?? '—'} / {preread.holder_masked ?? '—'}</span></div>
+                  <div><span className="me-k">预读期间</span><span className="me-v">{preread.period_start ?? '—'} ~ {preread.period_end ?? '—'}</span></div>
+                  <div><span className="me-k">页数 / 文字层</span><span className="me-v">{preread.pages} 页 / {preread.has_text_layer ? '有' : '无'}</span></div>
+                  <div><span className="me-k">预读疑似明细行</span><span className="me-v">{preread.txn_like_rows} 行（命中金额 {preread.amounts_found} 处）</span></div>
+                  <div><span className="me-k">与模板解析对照</span><span className="me-v">见下方自检 S8</span></div>
+                </div>
+                {preread.keyword_hits.length > 0 && (
+                  <p className="muted">命中流水特征：{preread.keyword_hits.slice(0, 8).join('、')}</p>
+                )}
+                {preread.reasons.length > 0 && <p className="me-warn">{preread.reasons.join('；')}</p>}
+              </div>
+            )}
 
             <h3>阈值提示</h3>
             {report.conclusions.length === 0 ? <p className="muted">未触发</p> : (
