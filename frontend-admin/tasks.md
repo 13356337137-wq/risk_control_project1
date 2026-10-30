@@ -30,7 +30,7 @@
 
 | 状态 | 编号 | 目标 | 为什么 | 涉及文件 | 验收命令 | 依赖 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | FE-38 | 试解析接真实接口，替换 mock | 标注完看不到系统怎么读 | `Annotate.tsx`、`lib/api.ts` | 标注后调 templates/infer 返回真实列与置信度 | BE-31 |
+| [x] | FE-38 | 试解析接真实接口，替换 mock | 标注完看不到系统怎么读 | `Annotate.tsx`、`lib/api.ts` | 标注后调 templates/infer 返回真实列与置信度（见 `history/20261030-fe38.md`） | BE-31 |
 | [ ] | FE-46 | 真实性总结改读后端 authenticity_summary | 前端自算会与导出/审计不一致 | `TaskList.tsx` | 报告 JSON 有该字段后页面只渲染 | BE-39 |
 | [ ] | FE-35 | 本地口令保护 /bank/ | 银行侧不能裸奔，哪怕本地演示 | 全应用 + 后端 | 未输入口令进不去 | BE-20a |
 
@@ -63,4 +63,5 @@
 | 文件名 | 来源 | 与哪个任务相关 | 状态 |
 | --- | --- | --- | --- |
 | algorithm/integration/samples/icbc_template.json | 团队生成（仅坐标） | FE-38 / FE-44 | 可用 |
-| src/mocks/*.json | 早期示例 | FE-36/37 已弃用 | 待清理 |
+| src/mocks/verify_result.json、metrics_report.json、interest_rates.json | 早期示例 | FE-36/37、报告与结息展示 | 仍在使用 |
+| src/mocks/ocr_lines.json | 早期示例 | 原 FE-38 假试解析 | 已删除（FE-38 接真实接口） |
