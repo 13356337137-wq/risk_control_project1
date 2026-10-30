@@ -112,7 +112,8 @@ export function UploadPage() {
       : start && end && start > end
         ? '开始月份不能晚于结束月份。'
         : '';
-  const canSubmit = Boolean(file && !submitting && !periodError && agreed && (!needPassword || password.trim()));
+  // 业务口径：唯一必填是流水文件；授权确认只提示不阻断（合规口径由 PM/PD 定）
+  const canSubmit = Boolean(file && !submitting && !periodError && (!needPassword || password.trim()));
 
   return (
     <>
