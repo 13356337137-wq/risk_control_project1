@@ -29,6 +29,7 @@
 | 状态 | 编号 | 目标 | 为什么 | 涉及文件 | 验收命令 |
 | --- | --- | --- | --- | --- | --- |
 | [x] | BE-20a | 本地口令保护：/bank 与写接口要求口令（先做单口令，不做完整 RBAC） | 现在任何能访问 8000 的人都能看报告 | `helpers/security.py`、路由依赖 | `cd backend && py -m pytest tests -q`（Bearer 缺失 401、正确口令 200） |
+| [x] | BE-42 | 受理阶段预读拦截：非流水返回 422 E_NOT_STATEMENT（附 preread 明细），预读写入 check_result.preread | 无关文件不能进流水解析与报告 | routers/tasks.py | 上传合同 PDF 返回 422；上传流水 200 且 check_result.preread 有值 |
 | [ ] | BE-39 | 报告输出 authenticity_summary（level/label/未通过层/受限数） | 前端自算会与导出/审计不一致 | `algo/report.py` 调用链 + `schemas` | 报告 JSON 含该字段，页面与它一致 |
 | [ ] | BE-31 | `POST /templates/dry-run`：传样例与 field_map，返回抽取值、条数、自检三项 | 标注页需要即时反馈 | `routers/templates.py` | 返回明细条数与自检结果 |
 | [x] | BE-33 | 口令次数上限与审计（PDF/zip 均 3 次，口令不落库） | 现在前端有提示，后端不限次 | `routers/tasks.py` + `audit_log` | `cd backend && py -m pytest tests -q`；实现按 file_id 统计 3 次失败，第 4 次 `E_LIMIT`，审计不含口令 |

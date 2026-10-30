@@ -1,4 +1,18 @@
-export interface TaskRow { id: number; biz_no: string; status: string; carrier: string | null; created_at: string | null }
+export interface PrereadInfo {
+  verdict: string; is_statement: boolean; confidence: number;
+  bank_name: string | null; bank_code: string | null;
+  account_masked: string | null; holder_masked: string | null;
+  period_start: string | null; period_end: string | null;
+  pages: number; has_text_layer: boolean; text_chars: number;
+  keyword_hits: string[]; irrelevant_hits: string[];
+  txn_like_rows: number; amounts_found: number;
+  sample_rows: string[]; reasons: string[];
+}
+
+export interface TaskRow {
+  id: number; biz_no: string; status: string; carrier: string | null; created_at: string | null;
+  check_result?: { preread?: PrereadInfo | null; warnings?: string[]; self_check?: unknown } | null;
+}
 export interface ReportPayload {
   carrier: string; verdict: string; verdict_reason: string;
   limitations: string[];

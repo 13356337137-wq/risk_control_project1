@@ -10,7 +10,8 @@ export type ApiErrorCode =
   | 'E_IMAGE_LOWQ'
   | 'E_IMAGE_BLUR'
   | 'E_AUTH'
-  | 'E_FORBID';
+  | 'E_FORBID'
+  | 'E_NOT_STATEMENT';
 
 export type Audience = 'borrower' | 'admin';
 
@@ -28,6 +29,7 @@ const MESSAGES: Record<Audience, Record<ApiErrorCode, string>> = {
     E_IMAGE_BLUR: '关键信息看不清，请重新拍摄',
     E_AUTH: '登录已过期',
     E_FORBID: '没有权限查看',
+    E_NOT_STATEMENT: '这不是银行流水文件，请上传对账单或交易明细',
   },
   admin: {
     E_FORMAT: '格式判定失败',
@@ -42,6 +44,7 @@ const MESSAGES: Record<Audience, Record<ApiErrorCode, string>> = {
     E_IMAGE_BLUR: '图片质量不达标',
     E_AUTH: '令牌无效',
     E_FORBID: '越权访问',
+    E_NOT_STATEMENT: '预读判定非流水文件',
   },
 };
 

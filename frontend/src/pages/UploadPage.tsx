@@ -96,6 +96,8 @@ export function UploadPage() {
       if (err instanceof ApiError && err.code === 'E_ENCRYPT') {
         setNeedPassword(true);
         setError('该文件有打开口令，请输入口令后重试。');
+      } else if (err instanceof ApiError && err.code === 'E_NOT_STATEMENT') {
+        setError(err.message || getErrorMessage(err, 'borrower'));
       } else {
         setError(getErrorMessage(err, 'borrower'));
       }

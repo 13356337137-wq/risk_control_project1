@@ -45,6 +45,7 @@ def run_analysis(
     *,
     password: str | None = None,
     template: dict | None = None,
+    preread: object | None = None,
 ) -> dict:
     """返回 {carrier, pages, has_text_layer, txn_count, report, metrics, bank} 供落库。"""
     raw = file_bytes
@@ -85,7 +86,7 @@ def run_analysis(
     )
     metrics = compute_metrics(parsed.transactions)
     txn_ids = list(range(1, len(parsed.transactions) + 1))
-    self_check = run_self_check(raw, parsed.transactions, getattr(parsed, "footer_count", None))
+    self_check = run_self_check(raw, parsed.transactions, getattr(parsed, "footer_count", None), preread=preread)
     report = build_report(
         verdict,
         metrics,
@@ -107,6 +108,7 @@ def run_analysis(
         "password_protected": password_protected,
         "txn_count": len(parsed.transactions),
         "warnings": list(parsed.warnings),
+        "preread": preread.to_dict() if preread is not None else None,
         "self_check": {
             "status": self_check.status,
             "summary": self_check.summary,
