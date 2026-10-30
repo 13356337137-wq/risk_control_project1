@@ -165,7 +165,7 @@ file_layer → content_layer → ledger_layer → external_layer
 
 # 报告聚合当前口径
 
-`build_report(verdict, metrics, carrier=..., hits=..., transactions=..., txn_ids=...)` 输出 contract「报告结构」的 12 个字段：
+`build_report(verdict, metrics, carrier=..., hits=..., transactions=..., txn_ids=..., materials=...)` 输出 contract「报告结构」的 13 个字段：
 
 | 字段 | 来源 |
 | --- | --- |
@@ -176,6 +176,7 @@ file_layer → content_layer → ledger_layer → external_layer
 | threshold_version / conclusions | `evaluate_thresholds()` |
 | trend | `MetricSet.trend`：月收入用剔除后入账，月支出用全部出账 |
 | evidence | 五态证据，按 `(rule_code,page_no,row_no)` 去重；`txn_id` 由页行映射，拿不到时 null 并写受限说明 |
+| materials | 报告依据的材料清单，调用方（后端 task_file）传入；空清单时在 limitations 声明「材料清单未提供」 |
 | version | 报告版本，调用方传入，从 1 起只增不改 |
 
 阈值默认值与结论编码（`threshold_version=2`，共 13 项）：

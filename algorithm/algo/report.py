@@ -33,6 +33,15 @@ class ReportEvidence(BaseModel):
     y: float
 
 
+class ReportMaterial(BaseModel):
+    """报告依据的材料；来源为后端 task_file，算法不自行推断。"""
+
+    file_id: int
+    role: Literal["original", "supplement"]
+    pages: int | None = None
+    sha256: str | None = None
+
+
 class Report(BaseModel):
     """contract.md「报告结构」；layers 按契约输出数组，每项为四层之一。"""
 
@@ -47,6 +56,7 @@ class Report(BaseModel):
     conclusions: list[Conclusion] = Field(default_factory=list)
     trend: list[MonthlyFlow] = Field(default_factory=list)
     evidence: list[ReportEvidence] = Field(default_factory=list)
+    materials: list[ReportMaterial] = Field(default_factory=list)
     version: int = 1
 
 
@@ -115,6 +125,7 @@ def build_report(
     monthly_payment: Decimal | None = None,
     transactions: list[Transaction] | None = None,
     txn_ids: list[int | None] | None = None,
+    materials: list[ReportMaterial] | None = None,
     version: int = 1,
 ) -> Report:
     """把五态、指标、阈值、趋势与证据聚合成一份报告。"""
@@ -131,7 +142,11 @@ def build_report(
     position_ids = _position_ids(transactions, txn_ids)
     evidence, missing = _evidence(verdict.evidence, position_ids)
 
+    report_materials = list(materials or [])
+
     limitations = list(verdict.limitations) + list(threshold_result.notes)
+    if not report_materials:
+        limitations.append("材料清单未提供，报告无法说明依据了哪几份材料")
     if missing:
         limitations.append("交易号未落库，证据定位到页/行/坐标")
     limitations = _dedupe(limitations)
@@ -151,5 +166,6 @@ def build_report(
         conclusions=threshold_result.conclusions,
         trend=metrics.trend,
         evidence=evidence,
+        materials=report_materials,
         version=version,
     )
