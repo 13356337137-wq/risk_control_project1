@@ -183,3 +183,17 @@ table.mini th { background: #f8fafc; color: #475569; font-weight: 600; }
 .me-note { margin: 2px 0; font-size: 12px; color: #4a5870; }
 .me-warn { margin: 2px 0; font-size: 12px; color: #a35b00; background: #fff7e8; border: 1px solid #f0d9b0; border-radius: 4px; padding: 6px 8px; }
 .metric-svg { width: 100%; max-width: 620px; height: auto; display: block; margin-top: 4px; }
+
+/* 真实性校验逐项 */
+.check-table .check-row { cursor: pointer; }
+.check-table .check-row:hover { background: #f5f8fd; }
+.check-table .check-row.open { background: #eef4ff; }
+.check-detail-row > td { background: #fbfcfe; padding: 10px 14px; border-top: 1px solid #e3e9f3; }
+.check-explain { display: flex; flex-direction: column; gap: 8px; }
+.check-status { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; background: #eef2f9; color: #3a4a63; }
+.check-status.pass, .check-status.consistent { background: #e7f6ec; color: #1c7a3d; }
+.check-status.fail, .check-status.inconsistent { background: #fdeaea; color: #b3261e; }
+.check-status.partial, .check-status.limited { background: #fff4e0; color: #a35b00; }
+.check-status.skipped, .check-status.unavailable { background: #eef2f9; color: #5b6b85; }
+.layer-block { margin: 10px 0 16px; }
+.layer-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }

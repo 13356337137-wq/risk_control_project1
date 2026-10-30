@@ -92,6 +92,7 @@ def test_report_matches_contract_shape():
         "trend",
         "evidence",
         "materials",
+        "self_check",
         "version",
     ]
     assert data["carrier"] == "electronic"

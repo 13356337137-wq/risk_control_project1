@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from algorithm.algo.metric_defs import definitions_version, metric_definitions  # noqa: E402
+from algorithm.algo.verification_defs import verification_definitions  # noqa: E402
 
 router = APIRouter(tags=["reports"], dependencies=[Depends(require_local_access)])
 
@@ -51,3 +52,9 @@ def get_metrics(task_id: int, db: Session = Depends(get_session)):
 def get_metric_definitions():
     """40 项指标的定义（公式/输入/可视图类型），供银行侧展开查看。"""
     return {"metric_set_version": definitions_version(), "items": metric_definitions()}
+
+
+@router.get("/verification-definitions")
+def get_verification_definitions():
+    """36 个真实性校验点：所属层与检验方法。运行结果随报告返回。"""
+    return {"items": verification_definitions()}
