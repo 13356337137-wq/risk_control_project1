@@ -116,3 +116,18 @@ AI：修正，再报一次
 # 七、换人怎么办
 
 覆盖「填写区」即可，不要新增第二份。历史看 history/，不靠这张表。
+
+# 附录：本地启动（v2，三台服务）
+
+~~~bash
+# 1 后端（数据库密码用环境变量，不写进仓库）
+cd backend && MYSQL_PASSWORD=你的密码 python -m uvicorn main:app --host 127.0.0.1 --port 8000
+
+# 2 借款人端
+cd frontend && npm install && npm run dev        # http://127.0.0.1:5173
+
+# 3 银行侧（任务与报告 / 模板标注 / 模板管理）
+cd frontend-admin && npm install && npm run dev  # http://127.0.0.1:5174
+~~~
+
+数据库：本机 MySQL，库 risk_control（首次启动自动创建并建 11 张表）。

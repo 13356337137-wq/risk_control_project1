@@ -17,6 +17,21 @@
 | 大小上限 | PDF 20MB；图片 10MB、短边 ≥ 1000px |
 | 载体判定 | 服务端判定 electronic / image / screenshot，不接受客户端自称 |
 
+# 必填清单
+
+**唯一必填：流水文件本身。其余一律选填。**
+
+| 字段 | 必填 | 缺失时怎么办 |
+| --- | --- | --- |
+| file | **是** | 没有文件无法受理，返回 `E_FORMAT` |
+| task_type | 否 | 默认 `credit` |
+| period_start / period_end | 否 | 取文件内标注的期间；取不到则在报告写「期间未取得」，指标分母改用明细覆盖期 |
+| password | 否 | 需要时再向客户索要，最多 3 次 |
+| source_ref（来源凭证）/ source_channel | 否 | 记「来源未核验」，**不因此降低结论档位**（见真实性校验分层设计） |
+| 授权勾选 | 否（业务口径） | 合规上建议保留，属产品决策项，见待确认 |
+
+选填缺失只影响**报告里的受限说明**，不影响能否受理。
+
 # 特殊情况：压缩包与口令
 
 | 情况 | 处置 |
@@ -35,7 +50,7 @@
 
 | 方法 | 路径 | 输入 | 成功 | 失败 |
 | --- | --- | --- | --- | --- |
-| POST | /tasks | multipart：file、task_type、period_start、period_end、password? | 202 {task_id,status,carrier} | E_FORMAT E_ENCRYPT E_LIMIT E_IMAGE_LOWQ E_IMAGE_BLUR |
+| POST | /tasks | multipart：**file（必填）**；task_type?、period_start?、period_end?、password?、source_ref?、source_channel? 全部选填 | 202 {task_id,status,carrier} | E_FORMAT E_ENCRYPT E_LIMIT E_IMAGE_LOWQ E_IMAGE_BLUR |
 | GET | /tasks | page、size、status、task_type | 200 分页 | — |
 | GET | /tasks/{id} | — | 200 详情 | 404 |
 | POST | /tasks/{id}/retry | — | 202 | E_STATE |
@@ -159,6 +174,32 @@
 2. 变更记录追加到「变更日志」，写明日期、内容、影响部分。
 3. 契约变更后，对应部分的 tasks.md 由 Agent 自动追加「同步契约」条目。
 
+# 标注外推（v2 新增）
+
+银行侧不必标完所有字段：**只标 1-3 处**（表头词或样例单元格）即可，系统外推整张表。
+
+| 规则 | 说明 |
+| --- | --- |
+| 最小标注 | 只要 amount + balance + txn_date 三处即可跑通（实测工行 8 页 191 笔） |
+| 外推方式 | 以标注为种子做列聚类 → 按表头文字映射（不用列序号，避免表头混入数字） |
+| 未标字段 | 按统计特征推断：日期格式→交易日期、含符号数值→金额、最右数值→余额、短文本→摘要 |
+| 结果透明 | 每个字段返回来源（labeled / inferred）与置信度，低置信需人工确认 |
+| 不成功时 | 返回 warnings（如未推断出必需字段），不静默生成坏模板 |
+| 接口 | POST /api/v1/templates/infer（multipart：file、marks，可选 bank_code/password/save_draft） |
+
+# 实现进度（v2 · 2026-10-30）
+
+| 能力 | 状态 | 说明 |
+| --- | --- | --- |
+| POST /tasks 受理 | **已实现** | multipart，file 必填；加密件返回 E_ENCRYPT |
+| GET /tasks、/tasks/{id} | **已实现** | 列表与状态 |
+| GET /tasks/{id}/transactions、/metrics | **已实现** | 明细与 40 项指标 |
+| GET /reports/{task_id} | **已实现** | 13 字段报告 |
+| /templates 增查与启用 | **已实现** | 同银行只保留一个启用版本 |
+| 其余 7 个接口 | 未实现 | 模板 dry-run、阈值配置、补件、导出、登录与权限 |
+| 11 张表 | **已实现** | 启动自动建表 |
+| 登录与权限 | 未实现 | v3 必补，当前接口无鉴权 |
+
 # 变更日志
 
 | 日期 | 内容 | 影响 |
@@ -171,3 +212,5 @@
 | 2026-10-29 | 删除 appeal 表（异议申诉功能已从需求移除），表数十一改十 | 数据、后端、产品设计 |
 | 2026-10-29 | 新增 task_file 关联表承载补件多文件（表数十改十一）；报告结构加 materials；补件不新建任务 | 数据、后端、算法、前端 |
 | 2026-10-30 | 新增「特殊情况：压缩包与口令」：zip 不在受理格式内、口令最多 3 次、口令不落库不落日志、代解需标注与审计 | 后端、前端、数据 |
+| 2026-10-30 | 新增标注外推：只标 1-3 处即可生成模板，字段带来源与置信度 | 算法、后端、前端 |
+| 2026-10-30 | v2 实现进度：受理/任务/报告/模板接口与 11 张表落地；必填清单确立为「只有流水文件必填」 | 全部 |
