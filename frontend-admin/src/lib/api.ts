@@ -8,6 +8,7 @@ export interface ReportPayload {
   evidence: { txn_id: number | null; rule_code: string; page_no: number; x: number; y: number }[];
   materials: { file_id: number; role: string; pages: number | null; sha256: string | null }[];
   version: number;
+  trend: { month: string; income: string; expense: string }[];
 }
 
 const BASE = '/api/v1';
@@ -34,10 +35,22 @@ export async function getReport(taskId: number): Promise<ReportPayload> {
 export interface TxnRow {
   id: number; txn_date: string | null; direction: string | null;
   amount: string | null; balance: string | null; summary: string | null;
+  counterparty_name?: string | null; page_no?: number | null; confidence?: string | null;
 }
 
 export async function getTransactions(taskId: number): Promise<TxnRow[]> {
   return json<TxnRow[]>(await fetch(`${BASE}/tasks/${taskId}/transactions?limit=2000`));
+}
+
+export interface MetricDef {
+  code: string; name: string; unit: string; group: string;
+  formula: string; inputs: string; viz: string;
+}
+
+export interface MetricDefs { metric_set_version: number; items: MetricDef[] }
+
+export async function getMetricDefinitions(): Promise<MetricDefs> {
+  return json<MetricDefs>(await fetch(BASE + '/metric-definitions'));
 }
 
 export async function getTask(taskId: number): Promise<TaskRow> {
