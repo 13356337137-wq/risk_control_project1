@@ -1,0 +1,30 @@
+{
+ "bank_code": "ICBC",
+ "version": 1,
+ "note": "工行电子明细模板（解析格式）；按列序号映射，规避表头混入数字",
+ "field_map": {
+  "txn_date": 0,
+  "account_no": 1,
+  "currency": 4,
+  "summary": 6,
+  "amount": 8,
+  "balance": 9,
+  "channel": 10
+ },
+ "header_columns": [
+  "交易日期",
+  "账号",
+  "储种",
+  "序号",
+  "币种",
+  "钞汇",
+  "摘要",
+  "地区",
+  "收入/支出金额",
+  "余额",
+  "渠道"
+ ],
+ "missing_columns": [
+  "对方户名（该版式无此列）"
+ ]
+}
