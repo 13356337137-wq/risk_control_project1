@@ -144,7 +144,7 @@ def build_report(
 
     report_materials = list(materials or [])
 
-    limitations = list(verdict.limitations) + list(threshold_result.notes)
+    limitations = list(verdict.limitations) + list(threshold_result.notes) + list(metrics.notes)
     if not report_materials:
         limitations.append("材料清单未提供，报告无法说明依据了哪几份材料")
     if missing:
