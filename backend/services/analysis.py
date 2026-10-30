@@ -20,7 +20,7 @@ from algorithm.algo.ledger_layer import analyze_ledger  # noqa: E402
 from algorithm.algo.external_layer import analyze_external, ExternalContext  # noqa: E402
 from algorithm.algo.verdict import conclude  # noqa: E402
 from algorithm.algo.metrics import compute_metrics  # noqa: E402
-from algorithm.algo.report import build_report, ReportMaterial  # noqa: E402
+from algorithm.algo.report import build_report, ReportMaterial, ReportCheck  # noqa: E402
 from algorithm.ocr.infer import Mark as InferMark, infer_template as _infer_template  # noqa: E402
 from algorithm.algo.self_check import run_self_check  # noqa: E402
 
@@ -72,6 +72,7 @@ def run_analysis(
     )
     metrics = compute_metrics(parsed.transactions)
     txn_ids = list(range(1, len(parsed.transactions) + 1))
+    self_check = run_self_check(raw, parsed.transactions, getattr(parsed, "footer_count", None))
     report = build_report(
         verdict,
         metrics,
@@ -79,8 +80,11 @@ def run_analysis(
         transactions=parsed.transactions,
         txn_ids=txn_ids,
         materials=[ReportMaterial(file_id=0, role="original", pages=pages)],
+        self_check=[
+            ReportCheck(code=i.code, name=i.name, status=i.status, detail=i.detail or "")
+            for i in self_check.items
+        ],
     )
-    self_check = run_self_check(raw, parsed.transactions, getattr(parsed, "footer_count", None))
     payload = json.loads(report.model_dump_json())
 
     return {

@@ -19,10 +19,20 @@ from .verdict import Verdict, VerdictResult
 Carrier = Literal["electronic", "image", "screenshot"]
 
 
+class ReportCheck(BaseModel):
+    """单个检查点的运行结果；方法说明见 verification_defs。"""
+
+    code: str
+    name: str
+    status: str
+    detail: str = ""
+
+
 class ReportLayer(BaseModel):
     layer: Literal["file", "content", "ledger", "external"]
     status: LayerStatus
     detail: str
+    checks: list[ReportCheck] = Field(default_factory=list)
 
 
 class ReportEvidence(BaseModel):
@@ -57,6 +67,7 @@ class Report(BaseModel):
     trend: list[MonthlyFlow] = Field(default_factory=list)
     evidence: list[ReportEvidence] = Field(default_factory=list)
     materials: list[ReportMaterial] = Field(default_factory=list)
+    self_check: list[ReportCheck] = Field(default_factory=list)
     version: int = 1
 
 
@@ -126,6 +137,7 @@ def build_report(
     transactions: list[Transaction] | None = None,
     txn_ids: list[int | None] | None = None,
     materials: list[ReportMaterial] | None = None,
+    self_check: list[ReportCheck] | None = None,
     version: int = 1,
 ) -> Report:
     """把五态、指标、阈值、趋势与证据聚合成一份报告。"""
@@ -157,7 +169,15 @@ def build_report(
         verdict_reason=verdict.verdict_reason,
         limitations=limitations,
         layers=[
-            ReportLayer(layer=layer.layer, status=layer.status, detail=layer.detail)
+            ReportLayer(
+                layer=layer.layer,
+                status=layer.status,
+                detail=layer.detail,
+                checks=[
+                    ReportCheck(code=c.code, name=c.name, status=c.status, detail=c.detail or "")
+                    for c in layer.checks
+                ],
+            )
             for layer in verdict.layers
         ],
         metrics=metrics.metrics,
@@ -167,5 +187,6 @@ def build_report(
         trend=metrics.trend,
         evidence=evidence,
         materials=report_materials,
+        self_check=self_check or [],
         version=version,
     )

@@ -217,3 +217,4 @@
 | 2026-10-30 | 指标口径 v2：月均/月供分母改为实际覆盖自然月（不足 1 月按 1 月并注明）；收入方向缺失时 A01/A02 给 null 而非 0；口径说明并入报告受限 | 算法、后端、前端 |
 | 接口 | GET /api/v1/metric-definitions（返回 40 项指标的 code/name/unit/group/formula/inputs/viz 与 metric_set_version） |
 | 2026-10-30 | 新增指标定义接口：银行侧逐条查看计算公式、输入与可视化类型；定义源在 algorithm/algo/metric_defs.py | 算法、后端、银行侧 |
+| 2026-10-30 | 报告 layers 每层新增 checks[]（code/name/status/detail），新增 self_check[] 七项自检结果；附 GET /api/v1/verification-definitions 返回 36 个检查点的检验方法 | 算法、后端、银行侧 |
