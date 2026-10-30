@@ -82,3 +82,9 @@ inputs/raw/
 inputs/samples/*.pdf
 inputs/samples/*.jpg
 inputs/samples/*.png
+
+# ===== 后端运行产物（v2）=====
+backend/storage/
+backend/uploads/
+backend/*.log
+deploy/.env

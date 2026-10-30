@@ -110,3 +110,52 @@ table.mini th { background: #f8fafc; color: #475569; font-weight: 600; }
 .events li.error b { color: #b91c1c; }
 .events li.warn b { color: #b45309; }
 .events .ev-name { color: #94a3b8; font-size: 11px; width: 100%; overflow-wrap: anywhere; }
+
+/* ===== v2 图表与洞察 ===== */
+.tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 10px 0 16px; }
+.tile { border: 1px solid #e6e9ef; border-radius: 10px; padding: 10px 12px; background: #fff; }
+.tile-label { font-size: 12px; color: #6b7684; }
+.tile-value { font-size: 18px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.tile.good .tile-value { color: #2f7d5d; }
+.tile.bad .tile-value { color: #c05a4a; }
+.tile.warn .tile-value { color: #b8860b; }
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 12px 0 18px; }
+.chart-card { border: 1px solid #e6e9ef; border-radius: 12px; padding: 12px 14px; background: #fff; }
+.chart-card h4 { margin: 0 0 6px; font-size: 14px; }
+.chart { width: 100%; height: auto; display: block; }
+.chart .axis { font-size: 11px; fill: #7b8794; }
+.chart .legend-good { fill: #2f7d5d; }
+.chart .legend-bad { fill: #c05a4a; }
+.chart .mark-bad { fill: #c05a4a; font-size: 11px; }
+.chart-note { font-size: 12px; color: #6b7684; margin: 6px 0 0; }
+.catbars { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.catbar { display: grid; grid-template-columns: 90px 1fr 130px; align-items: center; gap: 10px; font-size: 12px; }
+.cat-name { color: #3d4753; }
+.cat-track { background: #f1f3f7; border-radius: 5px; height: 10px; overflow: hidden; }
+.cat-fill { display: block; height: 100%; background: #2f6fb3; border-radius: 5px; }
+.cat-val { text-align: right; font-variant-numeric: tabular-nums; }
+.cat-val em { color: #6b7684; font-style: normal; margin-left: 6px; }
+.insights { margin: 6px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.9; }
+.insights b { color: #2b3440; }
+
+/* ===== 真实性校验总览 ===== */
+.auth-card { border: 1px solid #e6e9ef; border-radius: 12px; padding: 12px 14px; margin: 14px 0 4px; background: #fbfcfe; }
+.auth-card.pass { border-color: #cfe8da; background: #f5fbf7; }
+.auth-card.partial { border-color: #f0e2bf; background: #fffdf5; }
+.auth-card.fail { border-color: #f2cbc4; background: #fdf6f4; }
+.auth-card.unknown { border-color: #dcdff0; background: #f7f8fd; }
+.auth-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.auth-badge { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; color: #fff; background: #b8860b; font-size: 13px; }
+.auth-card.pass .auth-badge { background: #2f7d5d; }
+.auth-card.fail .auth-badge { background: #c05a4a; }
+.auth-card.unknown .auth-badge { background: #5b6bb5; }
+.auth-title { font-weight: 700; font-size: 15px; }
+.auth-meta { font-size: 12px; color: #6b7684; }
+.auth-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid #e0e4ea; background: #fff; color: #4a5563; }
+.chip.pass { border-color: #cfe8da; color: #2f7d5d; background: #f5fbf7; }
+.chip.limited { border-color: #f0e2bf; color: #9a7617; background: #fffdf5; }
+.chip.inconsistent { border-color: #f2cbc4; color: #b3453a; background: #fdf6f4; }
+.chip.unavailable { border-color: #dcdff0; color: #5b6bb5; background: #f7f8fd; }
+.auth-detail { margin-top: 14px; border-top: 1px dashed #e6e9ef; padding-top: 10px; }
+.auth-detail > summary { cursor: pointer; font-size: 13px; color: #2f6fb3; }
