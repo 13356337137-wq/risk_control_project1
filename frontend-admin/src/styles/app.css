@@ -197,3 +197,11 @@ table.mini th { background: #f8fafc; color: #475569; font-weight: 600; }
 .check-status.skipped, .check-status.unavailable { background: #eef2f9; color: #5b6b85; }
 .layer-block { margin: 10px 0 16px; }
 .layer-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+
+/* 预读取卡 */
+.preread-card { border: 1px solid #dde5f2; border-radius: 8px; padding: 12px 14px; margin: 14px 0 6px; background: #fafcff; }
+.preread-card.reject { border-color: #f0c2be; background: #fefafa; }
+.preread-card.review { border-color: #f0d9b0; background: #fffdf7; }
+.preread-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.preread-title { font-weight: 600; color: #22314f; }
+.preread-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 18px; }
