@@ -1,11 +1,11 @@
 """解析能力（兼容实现）：把文件读成逐笔明细。
 
 M1 直接复用封存版本的 algorithm.ocr.parse（三级保底）。
-M2 起这里换成两条能力并存：parse.template（走 layout 快通道）与 parse.generic（无模板主干）。
+M2 起多了一条 parse.layout_v2（用新版式驱动解析），两者可通过 overrides 切换对照。
 """
 from __future__ import annotations
 
-from ...core.contracts import Statement, TxnRow
+from ...compat.native import statement_from_parsed
 from ...core.paths import ensure_root_on_path
 from ...core.registry import capability
 
@@ -25,23 +25,6 @@ def _template_from_config(cfg: dict | None):
     )
 
 
-def _row(txn) -> TxnRow:
-    return TxnRow(
-        txn_date=txn.txn_date,
-        trade_time=getattr(txn, "trade_time", None),
-        reference_no=getattr(txn, "reference_no", None),
-        direction=txn.direction,
-        amount=txn.amount,
-        balance=txn.balance,
-        summary=txn.summary,
-        counterparty_name=txn.counterparty_name,
-        page_no=txn.page_no,
-        row_no=txn.row_no,
-        confidence=float(txn.confidence or 1.0),
-        extra=getattr(txn, "extra", None),
-    )
-
-
 @capability
 class AlgorithmParser:
     """兼容层：用封存版本的三级保底解析读明细。"""
@@ -50,7 +33,7 @@ class AlgorithmParser:
     version = "1.0"
     provides = "statement"
     requires = ("document", "profile")
-    priority = 0
+    priority = 10   # M2 阶段仍是默认；parse.layout_v2 用 overrides 指定后做对照
 
     def run(self, ctx, inputs):
         from algorithm.ocr.parse import parse as parse_document
@@ -58,10 +41,4 @@ class AlgorithmParser:
         doc = inputs["document"]
         template = _template_from_config(ctx.setting("parse.template"))
         parsed = parse_document(doc.data, template)
-        return Statement(
-            rows=[_row(t) for t in parsed.transactions],
-            footer_count=parsed.footer_count,
-            page_count=parsed.page_count,
-            warnings=list(parsed.warnings),
-            native=parsed,
-        )
+        return statement_from_parsed(parsed)
