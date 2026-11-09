@@ -16,6 +16,7 @@ from decimal import Decimal, InvalidOperation
 
 from ..features import expr as expr_mod
 from ..features.operators import Frame, OperatorError
+from . import ops_metrics  # noqa: F401  注册指标口径专用算子（导入即注册）
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,8 +42,27 @@ MAPPINGS: dict[str, MetricMapping] = {
     # 实测对不上：旧值 0.3061，本实现 0.3215（样本标准差/均值）。
     # 换成总体标准差是 0.2935，也对不上。旧的样本集口径（是否按日去重、用哪个均值）必须先确认，
     # 这就是「两套口径」的活证据——不对照就永远发现不了。
+    "A02": MetricMapping("A02", "月均收入",
+                         "sum(amount, where=direction=='in') / coverage_months()", scale=2),
+    "A03": MetricMapping("A03", "月收入中位数",
+                         "median(monthly_values(column='amount', where=direction=='in'))", scale=2),
+    "B07": MetricMapping("B07", "透支天数", "overdraft_days()", scale=0),
+    "C03": MetricMapping("C03", "日均余额", "mean(daily_balances())", scale=2),
     "C04": MetricMapping("C04", "余额波动率",
-                         blocked="口径待确认：旧 0.3061 无法由 std/mean 复现（样本 sd 0.3215、总体 sd 0.2935）"),
+                         "pstdev(daily_balances()) / mean(daily_balances())"),
+    "A04": MetricMapping("A04", "收入稳定性",
+                         "if_else(month_count() < 2, none, "
+                         "pstdev(monthly_values(column='amount', where=direction=='in')) / "
+                         "abs(mean(monthly_values(column='amount', where=direction=='in'))))"),
+    "A07": MetricMapping("A07", "收入趋势斜率",
+                         "slope(monthly_values(column='amount', where=direction=='in'))", scale=2),
+    "C05": MetricMapping("C05", "期末余额趋势", "slope(month_end_balances())", scale=2),
+    "D01": MetricMapping("D01", "月度笔数波动",
+                         "if_else(month_count() < 2, none, "
+                         "pstdev(monthly_values(agg='count')) / mean(monthly_values(agg='count')))"),
+    "D06": MetricMapping("D06", "休眠月数", "idle_months()", scale=0),
+    "E01": MetricMapping("E01", "对手方集中度 HHI", "share_square_sum()"),
+    "E02": MetricMapping("E02", "前三大占比", "top_share(k=3)"),
     "C06": MetricMapping("C06", "近三十天最低余额", "min(balance)"),
     "B08": MetricMapping("B08", "负余额笔数占比", "count(where=balance < 0) / count()"),
     "D05": MetricMapping("D05", "单笔最大占比",
@@ -56,27 +76,26 @@ MAPPINGS: dict[str, MetricMapping] = {
 # 每条都指向一个明确要补的能力，否则这张清单就没有决策价值。
 _TEXT_LIBRARY = "缺语义分类词库（摘要/对手方规则）：属规则层，不是算子能解决的"
 _MONTH_SERIES = "缺日历月序列算子：要按自然月补空月后再聚合/回归"
-_DAILY_BALANCE = "缺日终余额序列：要先按日还原余额（无交易日结转）"
-_GROUP_AGG = "缺分组内二次聚合：要「按对手方分组 → 求占比 → 再求和/排序」"
 _NEEDS_EXCLUSION = "缺剔除层结果：依赖六类剔除（同名互转/退款/放款/理财/信用卡/代付）"
 _DAY_SERIES = "缺按日序列算子：要按交易日分组后再算同日进出、月末窗口这类量"
 _MODULO = "缺取模/整数判定算子：\'amount % 100 == 0\' 这类形态判断现在写不出来"
 _SALARY_DAY = "缺「工资到账日」识别（语义词库）+ 日序列，两者都要"
 
+_REPAY_CLASS = "缺还款类语义分类（房贷/消费贷/分期/信用卡）：既要词库也要月序列，先有分类才能算月供"
 _BLOCKED: dict[str, str] = {
-    "A02": _MONTH_SERIES, "A03": _MONTH_SERIES, "A04": _MONTH_SERIES, "A07": _MONTH_SERIES,
-    "B01": _MONTH_SERIES, "B02": _MONTH_SERIES, "C05": _MONTH_SERIES, "D01": _MONTH_SERIES,
-    "D06": _MONTH_SERIES, "D08": _MONTH_SERIES,
+    # 规则/词库类（14 项）：本质不是算子问题，交给「命中词库」能力
     "A05": _TEXT_LIBRARY, "A06": _TEXT_LIBRARY, "B03": _TEXT_LIBRARY, "B04": _TEXT_LIBRARY,
     "B05": _TEXT_LIBRARY, "B06": _TEXT_LIBRARY, "C07": _TEXT_LIBRARY, "D04": _TEXT_LIBRARY,
     "E03": _TEXT_LIBRARY, "E04": _TEXT_LIBRARY, "E05": _TEXT_LIBRARY, "E06": _TEXT_LIBRARY,
     "E07": _TEXT_LIBRARY, "E08": _TEXT_LIBRARY,
-    "B07": _DAILY_BALANCE, "C03": _DAILY_BALANCE,
-    "E01": _GROUP_AGG, "E02": _GROUP_AGG,
-    "A08": _NEEDS_EXCLUSION,
+    # 还款分类（2 项）：分类 + 月序列都要
+    "B01": _REPAY_CLASS, "B02": _REPAY_CLASS,
+    # 序列与算子缺口（4 项）
     "C08": _DAY_SERIES, "D08": _DAY_SERIES,
     "D03": _MODULO,
     "D07": _SALARY_DAY,
+    # 依赖剔除层（1 项）
+    "A08": _NEEDS_EXCLUSION,
 }
 
 _BLOCKED_DEFAULT = "尚未映射：等映射表补齐后再动旧实现"
