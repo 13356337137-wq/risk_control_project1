@@ -34,11 +34,30 @@ def _median(values: list[float]) -> float:
     return (ordered[middle - 1] + ordered[middle]) / 2
 
 
+def _angle_from_words(words: list[Word]) -> float | None:
+    """OCR 的四点框自带方向：直接取中位数，比词对斜率稳得多。
+
+    词对斜率要靠「同一行的两个词」去反推方向，一旦字被切并或漏识别就会估反；
+    而每个词自己的方向是独立测出来的，噪声只会让中位数抖一点点。
+    """
+    angles = [word.angle for word in words if word.angle is not None]
+    if len(angles) < max(4, len(words) // 2):
+        return None
+    angles.sort()
+    middle = len(angles) // 2
+    median = angles[middle] if len(angles) % 2 else (angles[middle - 1] + angles[middle]) / 2
+    return round(-median, 2)      # 词的方向取反，就是该施加的校正角
+
+
 def estimate_angle(pages: list[PageWords]) -> float:
     """返回整份文件该施加的校正角（度）：正数表示逆时针掰。"""
     words = [w for page in pages for w in page.words]
     if len(words) < 8:
         return 0.0
+
+    from_boxes = _angle_from_words(words)
+    if from_boxes is not None:
+        return from_boxes if abs(from_boxes) <= MAX_ANGLE else 0.0
 
     heights = sorted(w.bottom - w.top for w in words)
     body_height = heights[len(heights) // 2]
@@ -80,12 +99,23 @@ def rotate_words(page: PageWords, angle_deg: float) -> PageWords:
 
     turned: list[Word] = []
     for word in page.words:
-        x0, y0 = turn(word.x0, word.top)
-        x1, y1 = turn(word.x1, word.bottom)
+        if word.oriented is None:
+            x0, y0 = turn(word.x0, word.top)
+            x1, y1 = turn(word.x1, word.bottom)
+            turned.append(replace(
+                word,
+                x0=min(x0, x1), x1=max(x0, x1),
+                top=min(y0, y1), bottom=max(y0, y1),
+            ))
+            continue
+        # 有固有尺寸的词：只转中心，尺寸保持不变（掰正之后字就是横的）
+        centre_x, centre_y = turn((word.x0 + word.x1) / 2, (word.top + word.bottom) / 2)
+        length, thickness = word.oriented
         turned.append(replace(
             word,
-            x0=min(x0, x1), x1=max(x0, x1),
-            top=min(y0, y1), bottom=max(y0, y1),
+            x0=centre_x - length / 2, x1=centre_x + length / 2,
+            top=centre_y - thickness / 2, bottom=centre_y + thickness / 2,
+            angle=0.0,
         ))
     return PageWords(page_no=page.page_no, width=page.width, height=page.height,
                      words=turned, has_text=page.has_text)

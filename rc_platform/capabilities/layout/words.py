@@ -15,6 +15,11 @@ class Word:
     bottom: float
     size: float = 0.0
     confidence: float = 1.0
+    # 文字基线方向（度，屏幕坐标 y 向下）与「沿基线/垂直基线」的固有尺寸。
+    # 文本层没有这两个概念，只有 OCR 的四点框才有。
+    # 有了固有尺寸，旋转时才能保持词框本来的大小——直接旋转外接矩形的四个角会让框越转越大。
+    angle: float | None = None
+    oriented: tuple[float, float] | None = None
 
     @property
     def cx(self) -> float:

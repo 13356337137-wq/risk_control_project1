@@ -1,0 +1,139 @@
+"""指标 <-> 特征 的映射表：把「两套口径」变成一张显式清单。
+
+为什么要有这张表：指标（B01、A01…）和特征（f_out_total、f_in_total…）现在各有一套实现，
+同一个概念两个值，改口径要改两处，漏一处没有任何东西会提醒你。
+
+这张表做两件事：
+1. 能映射的，写成表达式，由特征引擎算——这样口径只有一个来源
+2. 映射不了的，写清**卡在哪**（缺哪个算子/哪份输入），而不是悄悄跳过
+
+配 tools/metric_parity 使用：凡是标了 expr 的，逐值与旧实现比对；对不上就红。
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+
+from ..features import expr as expr_mod
+from ..features.operators import Frame, OperatorError
+
+
+@dataclass(frozen=True, slots=True)
+class MetricMapping:
+    code: str
+    name: str
+    expr: str | None = None
+    blocked: str | None = None      # 映射不了的原因：缺算子 / 缺输入 / 口径未定
+    scale: int = 4                  # 比对时的量化位数：金额 2，比例 4
+
+    @property
+    def mapped(self) -> bool:
+        return self.expr is not None
+
+
+MAPPINGS: dict[str, MetricMapping] = {
+    "A01": MetricMapping("A01", "期间收入合计", "sum(amount, where=direction=='in')", scale=2),
+    "A05": MetricMapping("A05", "工资占比", blocked="需「工资」语义分类词库（摘要/对手方规则），属规则层而非算子"),
+    "C01": MetricMapping("C01", "净流入",
+                         "sum(amount, where=direction=='in') - sum(amount, where=direction=='out')", scale=2),
+    "C02": MetricMapping("C02", "流入流出比",
+                         "sum(amount, where=direction=='in') / sum(amount, where=direction=='out')"),
+    # 实测对不上：旧值 0.3061，本实现 0.3215（样本标准差/均值）。
+    # 换成总体标准差是 0.2935，也对不上。旧的样本集口径（是否按日去重、用哪个均值）必须先确认，
+    # 这就是「两套口径」的活证据——不对照就永远发现不了。
+    "C04": MetricMapping("C04", "余额波动率",
+                         blocked="口径待确认：旧 0.3061 无法由 std/mean 复现（样本 sd 0.3215、总体 sd 0.2935）"),
+    "C06": MetricMapping("C06", "近三十天最低余额", "min(balance)"),
+    "B08": MetricMapping("B08", "负余额笔数占比", "count(where=balance < 0) / count()"),
+    "D05": MetricMapping("D05", "单笔最大占比",
+                         "max(amount, where=direction=='in') / (sum(amount, where=direction=='in') + sum(amount, where=direction=='out'))"),
+    "D02": MetricMapping("D02", "夜间交易占比",
+                         "count(where=(direction=='in' or direction=='out') and hour(trade_time) >= 22) / count()",
+                         blocked=None),
+}
+
+# 未映射指标的**具体原因**。按「缺什么」分类，而不是一句「还没做」——
+# 每条都指向一个明确要补的能力，否则这张清单就没有决策价值。
+_TEXT_LIBRARY = "缺语义分类词库（摘要/对手方规则）：属规则层，不是算子能解决的"
+_MONTH_SERIES = "缺日历月序列算子：要按自然月补空月后再聚合/回归"
+_DAILY_BALANCE = "缺日终余额序列：要先按日还原余额（无交易日结转）"
+_GROUP_AGG = "缺分组内二次聚合：要「按对手方分组 → 求占比 → 再求和/排序」"
+_NEEDS_EXCLUSION = "缺剔除层结果：依赖六类剔除（同名互转/退款/放款/理财/信用卡/代付）"
+_DAY_SERIES = "缺按日序列算子：要按交易日分组后再算同日进出、月末窗口这类量"
+_MODULO = "缺取模/整数判定算子：\'amount % 100 == 0\' 这类形态判断现在写不出来"
+_SALARY_DAY = "缺「工资到账日」识别（语义词库）+ 日序列，两者都要"
+
+_BLOCKED: dict[str, str] = {
+    "A02": _MONTH_SERIES, "A03": _MONTH_SERIES, "A04": _MONTH_SERIES, "A07": _MONTH_SERIES,
+    "B01": _MONTH_SERIES, "B02": _MONTH_SERIES, "C05": _MONTH_SERIES, "D01": _MONTH_SERIES,
+    "D06": _MONTH_SERIES, "D08": _MONTH_SERIES,
+    "A05": _TEXT_LIBRARY, "A06": _TEXT_LIBRARY, "B03": _TEXT_LIBRARY, "B04": _TEXT_LIBRARY,
+    "B05": _TEXT_LIBRARY, "B06": _TEXT_LIBRARY, "C07": _TEXT_LIBRARY, "D04": _TEXT_LIBRARY,
+    "E03": _TEXT_LIBRARY, "E04": _TEXT_LIBRARY, "E05": _TEXT_LIBRARY, "E06": _TEXT_LIBRARY,
+    "E07": _TEXT_LIBRARY, "E08": _TEXT_LIBRARY,
+    "B07": _DAILY_BALANCE, "C03": _DAILY_BALANCE,
+    "E01": _GROUP_AGG, "E02": _GROUP_AGG,
+    "A08": _NEEDS_EXCLUSION,
+    "C08": _DAY_SERIES, "D08": _DAY_SERIES,
+    "D03": _MODULO,
+    "D07": _SALARY_DAY,
+}
+
+_BLOCKED_DEFAULT = "尚未映射：等映射表补齐后再动旧实现"
+
+ALL_CODES: dict[str, str] = {
+    "A01": "期间收入合计", "A02": "月均收入", "A03": "月收入中位数", "A04": "收入稳定性",
+    "A05": "工资占比", "A06": "工资规律月数", "A07": "收入趋势斜率", "A08": "剔除额占比",
+    "B01": "月还款合计", "B02": "债务收入比 DTI", "B03": "新增贷款笔数", "B04": "网贷平台数",
+    "B05": "小贷还款笔数", "B06": "信用卡还款额", "B07": "透支天数", "B08": "负余额笔数占比",
+    "C01": "净流入", "C02": "流入流出比", "C03": "日均余额", "C04": "余额波动率",
+    "C05": "期末余额趋势", "C06": "近三十天最低余额", "C07": "现金提取占比", "C08": "当日进出占比",
+    "D01": "月度笔数波动", "D02": "夜间交易占比", "D03": "整数金额占比", "D04": "大额笔数",
+    "D05": "单笔最大占比", "D06": "休眠月数", "D07": "工资到账日波动", "D08": "期末冲量",
+    "E01": "对手方集中度 HHI", "E02": "前三大占比", "E03": "关联方占比", "E04": "小贷命中率",
+    "E05": "涉赌命中率", "E06": "虚拟币命中率", "E07": "现金存入占比", "E08": "第三方支付占比",
+}
+
+
+def registry() -> dict[str, MetricMapping]:
+    """完整清单：已映射的用表达式，未映射的带原因。少一个指标都会被发现。"""
+    out: dict[str, MetricMapping] = {}
+    for code, name in ALL_CODES.items():
+        out[code] = MAPPINGS.get(code) or MetricMapping(code, name, blocked=_BLOCKED.get(code, _BLOCKED_DEFAULT))
+    return out
+
+
+def evaluate(statement) -> dict[str, Decimal | None]:
+    """只算已映射的那些；未映射的不出现（不是 0）。"""
+    frame = Frame(list(statement.rows))
+    values: dict[str, Decimal | None] = {}
+    for code, mapping in registry().items():
+        if not mapping.mapped:
+            continue
+        notes: list[str] = []
+        try:
+            raw = expr_mod.eval_expr(mapping.expr, frame, notes=notes)
+        except (OperatorError, expr_mod.ExprError):
+            values[code] = None
+            continue
+        values[code] = _as_decimal(raw)
+    return values
+
+
+def _as_decimal(value) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, bool):
+        return Decimal(int(value))
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def coverage() -> dict[str, int]:
+    total = len(ALL_CODES)
+    mapped = sum(1 for item in registry().values() if item.mapped)
+    return {"total": total, "mapped": mapped, "blocked": total - mapped}

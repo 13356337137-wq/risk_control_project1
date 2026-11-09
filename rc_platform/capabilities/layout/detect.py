@@ -251,7 +251,11 @@ def _confidence(bands: list[Band], source: str, rows: int) -> float:
 def detect_page(page: PageWords) -> TableRegion | None:
     if not page.has_text:
         return None
-    lines: list[Line] = group_lines(page.words)
+    # 行容差按字高自适应：OCR 词比文本层高一个量级，固定 3pt 会把同一表头拆成三行，
+    # 于是只认出 3 个字段、整页列数少一半（实测 +3° 图片件就这么丢的日期列）
+    heights = sorted(word.bottom - word.top for word in page.words)
+    tolerance = max(2.0, heights[len(heights) // 2] * 0.6)
+    lines: list[Line] = group_lines(page.words, y_tol=tolerance)
     tokens_per_line = [merge_tokens(line) for line in lines]
 
     header = _find_header(tokens_per_line)
