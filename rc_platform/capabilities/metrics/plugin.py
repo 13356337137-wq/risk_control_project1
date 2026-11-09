@@ -4,6 +4,7 @@ M3 起指标改由特征库派生（指标 = 若干特征的组合），届时�
 """
 from __future__ import annotations
 
+from ...compat.native import parsed_from_statement
 from ...core.contracts import MetricItem, MetricTable
 from ...core.paths import ensure_root_on_path
 from ...core.registry import capability
@@ -24,7 +25,7 @@ class AlgorithmMetrics:
     def run(self, ctx, inputs):
         from algorithm.algo.metrics import compute_metrics
 
-        parsed = inputs["statement"].native
+        parsed = parsed_from_statement(inputs["statement"])
         result = compute_metrics(parsed.transactions)
         return MetricTable(
             items=[

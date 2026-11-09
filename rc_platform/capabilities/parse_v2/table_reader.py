@@ -108,6 +108,15 @@ def _text(tokens: list[Word]) -> str:
     return " ".join(token.text for token in tokens).strip()
 
 
+def _first_money(tokens: list[Word]) -> Decimal | None:
+    """一个列格里可能有别的字（微信的「支付方式」就被并进金额列），取第一个能解析的数。"""
+    for token in tokens:
+        value = parse_money(token.text)
+        if value is not None:
+            return value
+    return None
+
+
 def _row_from_cells(cells: dict[str, list[Word]], page_no: int, row_no: int) -> TxnRow | None:
     date_text = _text(cells.get("txn_date", []))
     txn_date = parse_date(date_text) if date_text else None
@@ -117,20 +126,21 @@ def _row_from_cells(cells: dict[str, list[Word]], page_no: int, row_no: int) -> 
 
     amount: Decimal | None = None
     if cells.get("amount_in"):
-        amount = parse_money(_text(cells["amount_in"]))
-        direction = direction or "in"
+        amount = _first_money(cells["amount_in"])
+        if amount is not None:
+            direction = direction or "in"
     if cells.get("amount_out"):
-        out_amount = parse_money(_text(cells["amount_out"]))
+        out_amount = _first_money(cells["amount_out"])
         if out_amount is not None:
             amount, direction = abs(out_amount), direction or "out"
     if amount is None and cells.get("amount"):
-        raw = parse_money(_text(cells["amount"]))
+        raw = _first_money(cells["amount"])
         if raw is not None:
             amount = abs(raw)
             if raw < 0:
                 direction = direction or "out"
 
-    balance = parse_money(_text(cells["balance"])) if cells.get("balance") else None
+    balance = _first_money(cells["balance"]) if cells.get("balance") else None
     if balance is not None and amount is not None and not direction:
         direction = "in" if balance > 0 else direction
 

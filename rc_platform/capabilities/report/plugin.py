@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 
+from ...compat.native import parsed_from_statement
 from ...core.contracts import ReportBundle
 from ...core.paths import ensure_root_on_path
 from ...core.registry import capability
@@ -31,7 +32,7 @@ class AlgorithmReport:
         statement = inputs["statement"]
         verification = inputs["verification"]
         metric_table = inputs["metrics"]
-        parsed = statement.native
+        parsed = parsed_from_statement(statement)
         transactions = list(parsed.transactions)
         payload = json.loads(
             build_report(

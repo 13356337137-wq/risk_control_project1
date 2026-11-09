@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from ...compat.native import parsed_from_statement
 from ...core.contracts import LayerOutcome, Verification
 from ...core.paths import ensure_root_on_path
 from ...core.registry import capability
@@ -32,7 +33,7 @@ class AlgorithmVerifier:
         doc = inputs["document"]
         profile = inputs["profile"]
         statement = inputs["statement"]
-        parsed = statement.native
+        parsed = parsed_from_statement(statement)
 
         file_layer = analyze_file(doc.data, carrier=profile.carrier)
         content_layer = analyze_content(parsed)
