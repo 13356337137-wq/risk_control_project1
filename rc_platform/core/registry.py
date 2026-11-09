@@ -26,6 +26,7 @@ class CapabilityInfo:
     requires: tuple[str, ...]
     cls: type
     priority: int = 0
+    optional_requires: tuple[str, ...] = ()
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -33,6 +34,7 @@ class CapabilityInfo:
             "version": self.version,
             "provides": self.provides,
             "requires": list(self.requires),
+            "optional_requires": list(self.optional_requires),
             "priority": self.priority,
             "doc": (self.cls.__doc__ or "").strip().splitlines()[0] if self.cls.__doc__ else "",
         }
@@ -49,7 +51,7 @@ def capability(cls: type) -> type:
         raise CapabilityError(f"{cls.__name__} 缺少 run(ctx, inputs)")
     if cls.provides not in CONTRACTS:
         raise CapabilityError(f"{cls.__name__} 产出的契约 {cls.provides} 未登记")
-    for need in cls.requires:
+    for need in tuple(cls.requires) + tuple(getattr(cls, "optional_requires", ())):
         if need not in CONTRACTS:
             raise CapabilityError(f"{cls.__name__} 依赖的契约 {need} 未登记")
     previous = _CATALOG.get(cls.name)
@@ -96,6 +98,7 @@ class Registry:
             requires=tuple(cls.requires),
             cls=cls,
             priority=int(getattr(cls, "priority", 0)),
+            optional_requires=tuple(getattr(cls, "optional_requires", ())),
         )
 
     def describe(self) -> list[dict[str, Any]]:
@@ -153,6 +156,12 @@ class Registry:
                 info = self.info(name)
                 for need in info.requires:
                     visit(need)
+                # 可选依赖：没有可用实现就跳过，装配不因此失败（外部层未接入是常态）
+                for need in info.optional_requires:
+                    try:
+                        visit(need)
+                    except ContractMissing:
+                        continue
                 if name not in order:
                     order.append(name)
                 done.add(contract)

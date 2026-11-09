@@ -6,7 +6,7 @@ M4 之后新解析器自己产出 Statement，这里只留「对照旧版」一�
 """
 from __future__ import annotations
 
-from ..core.contracts import Statement, TxnRow
+from ..core.contracts import LayerOutcome, LayerResult, Statement, TxnRow, Verification
 
 
 def txn_row(txn) -> TxnRow:
@@ -59,6 +59,48 @@ def parsed_from_statement(statement: "Statement"):
         page_count=statement.page_count,
         footer_count=statement.footer_count,
         warnings=list(statement.warnings),
+    )
+
+
+def layer_result(native, layer: str) -> LayerResult:
+    """旧层对象 -> 契约层结果。native 一起带过去，compose 还要用它保住成因区分。"""
+    from algorithm.algo.models import ContentLayerResult
+
+    if isinstance(native, ContentLayerResult):
+        return LayerResult(
+            layer=layer,
+            status=native.status,
+            detail="；".join(f"{c.code} {c.name}{c.status}" for c in native.checks),
+            checks=[c.model_dump() for c in native.checks],
+            limitations=list(native.limitations),
+            evidence=[e.model_dump() for c in native.checks for e in c.evidence],
+            native=native,
+        )
+    return LayerResult(
+        layer=layer,
+        status=native.status,
+        detail=native.detail,
+        outcome=native.outcome,
+        checks=[c.model_dump() for c in native.checks],
+        limitations=list(native.limitations),
+        evidence=[e.model_dump() for e in native.evidence],
+        native=native,
+    )
+
+
+def verification_from_verdict(verdict) -> Verification:
+    return Verification(
+        verdict=verdict.verdict,
+        verdict_reason=verdict.verdict_reason,
+        layers=[
+            LayerOutcome(layer=item.layer, status=item.status, detail=item.detail,
+                         checks=[c.model_dump() for c in item.checks])
+            for item in verdict.layers
+        ],
+        trust=verdict.trust.model_dump() if verdict.trust else {},
+        evidence=[e.model_dump() for e in verdict.evidence],
+        limitations=list(verdict.limitations),
+        native=verdict,
     )
 
 

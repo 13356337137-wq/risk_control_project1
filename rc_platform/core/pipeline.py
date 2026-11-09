@@ -93,6 +93,7 @@ class Pipeline:
                 continue
 
             inputs = {need: artifacts[need] for need in info.requires}
+            inputs.update({need: artifacts[need] for need in info.optional_requires if need in artifacts})
             ctx.emit(ProgressEvent(ctx.job_id, name, index, total, "start"))
             t0 = time.perf_counter()
             try:

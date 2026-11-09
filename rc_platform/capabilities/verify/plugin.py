@@ -21,7 +21,7 @@ class AlgorithmVerifier:
     version = "1.0"
     provides = "verification"
     requires = ("document", "profile", "statement")
-    priority = 0
+    priority = 0   # M4 起默认走 verify.compose（四层可插拔），这个保留作对照
 
     def run(self, ctx, inputs):
         from algorithm.algo.content_layer import analyze_content

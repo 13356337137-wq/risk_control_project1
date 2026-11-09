@@ -121,7 +121,7 @@ def test_describe_is_json_safe():
     described = reg.describe()
     assert described == [{
         "name": "d.x", "version": "0", "provides": "profile",
-        "requires": [], "priority": 0, "doc": "",
+        "requires": [], "optional_requires": [], "priority": 0, "doc": "",
     }]
 
 
@@ -192,5 +192,6 @@ def test_core_never_imports_concrete_capabilities():
 def test_contract_names_are_complete():
     assert set(contracts.contract_names()) == {
         "document", "profile", "layout", "statement",
+        "layer_file", "layer_content", "layer_ledger", "layer_external",
         "verification", "metrics", "features", "report",
     }

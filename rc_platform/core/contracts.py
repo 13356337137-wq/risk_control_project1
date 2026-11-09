@@ -103,6 +103,23 @@ class LayerOutcome:
 
 
 @dataclass(slots=True)
+class LayerResult:
+    """单层核验结果：四层各是一个可以单独替换、单独停用的能力。
+
+    native 是过渡字段：判据（尤其内容层的成因区分）还在封存版本的实现里，
+    换成自己的实现时这里就该为空，由 compose 重新解释。
+    """
+    layer: str
+    status: str = "skipped"          # pass / fail / limited / skipped / unavailable / undetermined
+    detail: str = ""
+    outcome: str | None = None
+    checks: list[dict] = field(default_factory=list)
+    limitations: list[str] = field(default_factory=list)
+    evidence: list[dict] = field(default_factory=list)
+    native: Any = None
+
+
+@dataclass(slots=True)
 class Verification:
     """核验结论：四层 + 五态 + 置信分层。"""
     verdict: str = "undetermined"
@@ -156,6 +173,10 @@ CONTRACTS: dict[str, type] = {
     "profile": DocumentProfile,
     "layout": LayoutPlan,
     "statement": Statement,
+    "layer_file": LayerResult,
+    "layer_content": LayerResult,
+    "layer_ledger": LayerResult,
+    "layer_external": LayerResult,
     "verification": Verification,
     "metrics": MetricTable,
     "features": FeatureSet,
