@@ -100,6 +100,13 @@ def _spread(
                     break
         if len(hits) >= MIN_HITS:
             bands.append(Band(field_name, "header", left, right, hits))
+        elif hits:
+            # 命中不足但确实读到过值：保留几何，交给人/下游判断
+            bands.append(Band(field_name, "header_weak", left, right, hits))
+        else:
+            # 表头认出来了、这一段没有值（例如建行的收入金额列在这页全空）：
+            # 仍然保留列带。删掉它会让「收入金额」的值被就近吸进「支出金额」，方向直接判反。
+            bands.append(Band(field_name, "header_empty", left, right, []))
     return _dedupe_bands(bands)
 
 
@@ -291,7 +298,7 @@ def detect_page(page: PageWords) -> TableRegion | None:
     )
     columns = [
         ColumnBand(field=b.field, x=b.x0 / page.width, w=max(b.width / page.width, 0.005),
-                   confidence=1.0 if b.source == "header" else 0.6)
+                   confidence={"header": 1.0, "header_weak": 0.5}.get(b.source, 0.4))
         for b in bands
     ]
     return TableRegion(

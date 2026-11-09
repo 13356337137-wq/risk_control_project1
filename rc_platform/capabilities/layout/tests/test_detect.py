@@ -35,7 +35,9 @@ def test_icbc_has_date_amount_balance():
 def test_ccb_splits_income_and_expense():
     fields = fields_of("ccb")
     assert "txn_date" in fields and "balance" in fields
-    assert fields & {"amount_out", "amount_in"}
+    # 收入列在这批样本里大部分为空，但表头认出来了就必须留列带：
+    # 删掉它，收入金额会被就近吸进支出金额，方向直接判反
+    assert {"amount_in", "amount_out"} <= fields
 
 
 @needs_samples

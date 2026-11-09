@@ -18,7 +18,8 @@ def read_pages_via_ocr(data: bytes, dpi: int = 200) -> list[PageWords]:
     for page in result.pages:
         words = [
             Word(text=w.text, x0=float(w.bbox[0]), x1=float(w.bbox[2]),
-                 top=float(w.bbox[1]), bottom=float(w.bbox[3]))
+                 top=float(w.bbox[1]), bottom=float(w.bbox[3]),
+                 confidence=float(getattr(w, "confidence", 1.0) or 1.0))
             for w in page.words
         ]
         pages.append(PageWords(

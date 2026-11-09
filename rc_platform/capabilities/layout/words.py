@@ -14,6 +14,7 @@ class Word:
     top: float
     bottom: float
     size: float = 0.0
+    confidence: float = 1.0
 
     @property
     def cx(self) -> float:
