@@ -139,3 +139,51 @@ a { color: var(--brand); }
 }
 .inline-link { margin-left: 2px; }
 .boot { display: grid; place-items: center; height: 100%; color: var(--muted); }
+/* ---- 借款侧 ---- */
+.topnav { display: flex; gap: 16px; font-size: 14px; }
+.topnav a { color: var(--muted); text-decoration: none; }
+.topnav a:hover { color: var(--brand); }
+
+.panel {
+  background: #fff; border: 1px solid var(--line); border-radius: 16px;
+  padding: 26px 24px; max-width: 760px;
+}
+
+.drop {
+  border: 1.5px dashed #c9d6e8; border-radius: 14px; padding: 28px;
+  text-align: center; cursor: pointer; transition: .15s; background: #fbfdff;
+}
+.drop.dragging { border-color: var(--brand); background: #f2f7ff; }
+.drop.has-file { text-align: left; border-style: solid; }
+.drop-title { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+.danger { color: #b91c1c; }
+
+.file-list ol { margin: 10px 0 0; padding-left: 0; list-style: none; display: grid; gap: 8px; }
+.file-list li { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.file-ok { margin: 0; color: #047857; font-weight: 600; }
+.link-btn {
+  border: 0; background: none; color: var(--brand); cursor: pointer;
+  font-family: inherit; font-size: 13px; padding: 0 2px;
+}
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+@media (max-width: 640px) { .grid-2 { grid-template-columns: 1fr; } }
+
+.actions { margin-top: 20px; }
+
+table.mini { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-bottom: 18px; }
+table.mini th, table.mini td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+table.mini th { color: var(--muted); font-weight: 600; font-size: 12.5px; }
+
+/* ---- 进度时间线 ---- */
+.timeline { list-style: none; margin: 22px 0 8px; padding: 0; display: grid; gap: 14px; }
+.timeline-item { display: flex; align-items: center; gap: 12px; font-size: 14px; color: var(--muted); }
+.timeline-item .dot {
+  width: 12px; height: 12px; border-radius: 50%; background: #dbe4f0; flex: 0 0 auto;
+}
+.timeline-item.done { color: var(--ink); }
+.timeline-item.done .dot { background: #10b981; }
+.timeline-item.active { color: var(--brand); font-weight: 600; }
+.timeline-item.active .dot { background: var(--brand); box-shadow: 0 0 0 4px rgba(37, 99, 235, .15); }

@@ -55,6 +55,16 @@ export async function request<T>(path: string, options: Options = {}): Promise<T
         detail: payload,
       });
     }
+
+    // 两种出参形状并存：银行侧接口直接返回对象，借款侧接口外面套了一层 {code, data}。
+    // 合并前是两个客户端各处理各的，这里统一收口，页面不必关心。
+    const envelope = payload as { code?: unknown; data?: unknown; message?: string } | null;
+    if (envelope && typeof envelope === 'object' && 'code' in envelope && 'data' in envelope) {
+      if (String(envelope.code) !== '0') {
+        throw new ApiError(String(envelope.code), envelope.message ?? '请求失败', { detail: payload });
+      }
+      return envelope.data as T;
+    }
     return payload as T;
   } catch (error) {
     if (error instanceof ApiError) throw error;
