@@ -93,6 +93,84 @@ export function getVerificationDefinitions(): Promise<{ items: VerificationDef[]
   return request<{ items: VerificationDef[] }>('/verification-definitions');
 }
 
+export type TemplateRow = {
+  id: number;
+  bank_code: string;
+  version: number;
+  status: string;
+  field_map: Record<string, unknown>;
+  created_at?: string | null;
+  updated_at?: string | null;
+  deleted_at?: string | null;
+};
+
+export function listTemplates(includeDeleted = false): Promise<TemplateRow[]> {
+  return request<TemplateRow[]>('/templates' + (includeDeleted ? '?include_deleted=true' : ''));
+}
+
+export type TemplateDetail = {
+  id: number;
+  bank_code: string;
+  version: number;
+  status: string;
+  field_map: Record<string, unknown>;
+  layout: unknown | null;
+};
+
+export function getTemplate(id: number): Promise<TemplateDetail> {
+  return request<TemplateDetail>('/templates/' + id);
+}
+
+export type TemplateStats = {
+  template_id: number;
+  bank_code: string;
+  version: number;
+  status: string;
+  tasks_total: number;
+  tasks_done: number;
+  tasks_failed: number;
+  success_rate: number | null;
+  avg_txn_count: number | null;
+  zero_txn_tasks: number;
+};
+
+export function getTemplateStats(id: number): Promise<TemplateStats> {
+  return request<TemplateStats>('/templates/' + id + '/stats');
+}
+
+export type TemplateLayoutBox = { field: string; column: string; page: number; x0: number; y0: number; x1: number; y1: number };
+export type TemplateLayout = {
+  template_id: number;
+  has_sample: boolean;
+  layout: { pages?: Record<string, { width: number; height: number }>; page_count?: number; boxes?: TemplateLayoutBox[] } | null;
+  field_map: Record<string, unknown> | null;
+  header_columns: string[] | null;
+};
+
+export function getTemplateLayout(id: number): Promise<TemplateLayout> {
+  return request<TemplateLayout>('/templates/' + id + '/layout');
+}
+
+export function publishTemplate(id: number): Promise<{ status: string }> {
+  return request<{ status: string }>('/templates/' + id + '/publish', { method: 'POST' });
+}
+
+export function disableTemplate(id: number): Promise<{ status: string }> {
+  return request<{ status: string }>('/templates/' + id + '/disable', { method: 'POST' });
+}
+
+export function duplicateTemplate(id: number): Promise<{ id: number; version: number }> {
+  return request<{ id: number; version: number }>('/templates/' + id + '/duplicate', { method: 'POST' });
+}
+
+export function deleteTemplate(id: number): Promise<{ id: number; removed: boolean }> {
+  return request<{ id: number; removed: boolean }>('/templates/' + id, { method: 'DELETE' });
+}
+
+export function restoreTemplate(id: number): Promise<{ id: number; restored: boolean }> {
+  return request<{ id: number; restored: boolean }>('/templates/' + id + '/restore', { method: 'POST' });
+}
+
 export type AppUser = {
   id: number;
   username: string;

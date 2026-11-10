@@ -4,6 +4,9 @@ import TaskListPage from './TaskListPage';
 import ReportPage from './ReportPage';
 import AuditPage from './AuditPage';
 import UsersPage from './UsersPage';
+import TemplatesPage from './TemplatesPage';
+import TemplateDetailPage from './TemplateDetailPage';
+import TemplateLayoutPage from './TemplateLayoutPage';
 import MetricDefsPage from './MetricDefsPage';
 import VerificationDefsPage from './VerificationDefsPage';
 import ComingSoon from '../ComingSoon';
@@ -53,7 +56,7 @@ export default function BankerApp() {
           </div>
           <div className="sider-group">
             <span className="sider-title">模板</span>
-            <NavLink to="/bank/templates">模板库</NavLink>
+            <NavLink to="/bank/templates" end>模板库</NavLink>
             <NavLink to="/bank/annotate">标注</NavLink>
           </div>
           <div className="sider-group">
@@ -78,6 +81,9 @@ export default function BankerApp() {
             <Route index element={<Navigate to="tasks" replace />} />
             <Route path="tasks" element={<TaskListPage />} />
             <Route path="report/:id" element={<ReportPage />} />
+            <Route path="templates" element={<TemplatesPage />} />
+            <Route path="templates/:id" element={<TemplateDetailPage />} />
+            <Route path="templates/:id/layout" element={<TemplateLayoutPage />} />
             <Route path="metrics" element={<MetricDefsPage />} />
             <Route path="verifications" element={<VerificationDefsPage />} />
             <Route path="audit" element={<AuditPage />} />
