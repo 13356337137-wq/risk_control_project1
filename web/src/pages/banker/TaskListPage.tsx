@@ -23,11 +23,13 @@ export default function TaskListPage() {
   const [authenticity, setAuthenticity] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const PAGE = 20;
+  const [offset, setOffset] = useState(0);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    listTasks({ q: query || undefined, authenticity: authenticity || undefined, limit: 30 })
+    listTasks({ q: query || undefined, authenticity: authenticity || undefined, limit: PAGE, offset })
       .then((result) => {
         if (alive) {
           setData(result);
@@ -39,7 +41,7 @@ export default function TaskListPage() {
     return () => {
       alive = false;
     };
-  }, [query, authenticity]);
+  }, [query, authenticity, offset]);
 
   const facets = data?.facets?.authenticity ?? {};
 
@@ -55,9 +57,18 @@ export default function TaskListPage() {
             className="search"
             placeholder="搜索业务号 / 户名"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setOffset(0);
+            }}
           />
-          <select value={authenticity} onChange={(event) => setAuthenticity(event.target.value)}>
+          <select
+            value={authenticity}
+            onChange={(event) => {
+              setAuthenticity(event.target.value);
+              setOffset(0);
+            }}
+          >
             <option value="">全部真实性</option>
             {Object.entries(facets).map(([key, count]) => (
               <option key={key} value={key}>
@@ -123,6 +134,24 @@ export default function TaskListPage() {
       ) : null}
 
       {data && data.items.length === 0 ? <p className="muted">没有符合条件的流水。</p> : null}
+
+      {data && data.total > PAGE ? (
+        <div className="pager">
+          <button className="btn btn-ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>
+            上一页
+          </button>
+          <span className="muted small">
+            第 {offset + 1}–{Math.min(offset + PAGE, data.total)} 条 / 共 {data.total} 条
+          </span>
+          <button
+            className="btn btn-ghost"
+            disabled={offset + PAGE >= data.total}
+            onClick={() => setOffset(offset + PAGE)}
+          >
+            下一页
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

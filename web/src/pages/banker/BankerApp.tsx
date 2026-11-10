@@ -4,6 +4,8 @@ import TaskListPage from './TaskListPage';
 import ReportPage from './ReportPage';
 import AuditPage from './AuditPage';
 import UsersPage from './UsersPage';
+import MetricDefsPage from './MetricDefsPage';
+import VerificationDefsPage from './VerificationDefsPage';
 import ComingSoon from '../ComingSoon';
 
 /**
@@ -56,6 +58,8 @@ export default function BankerApp() {
           </div>
           <div className="sider-group">
             <span className="sider-title">参数</span>
+            <NavLink to="/bank/metrics">指标口径</NavLink>
+            <NavLink to="/bank/verifications">校验口径</NavLink>
             <NavLink to="/bank/thresholds">风控参数</NavLink>
             <NavLink to="/bank/entities">客户与账户</NavLink>
             <NavLink to="/bank/ocr">OCR 路由</NavLink>
@@ -74,6 +78,8 @@ export default function BankerApp() {
             <Route index element={<Navigate to="tasks" replace />} />
             <Route path="tasks" element={<TaskListPage />} />
             <Route path="report/:id" element={<ReportPage />} />
+            <Route path="metrics" element={<MetricDefsPage />} />
+            <Route path="verifications" element={<VerificationDefsPage />} />
             <Route path="audit" element={<AuditPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route

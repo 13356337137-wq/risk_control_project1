@@ -15,6 +15,8 @@ export default function ReportPage() {
   const taskId = Number(id);
   const [report, setReport] = useState<ReportPayload | null>(null);
   const [error, setError] = useState('');
+  // 客户经理多数时候只看结论；明细版是「被问住时」的证据页，默认不铺开
+  const [view, setView] = useState<'summary' | 'detail'>('summary');
 
   useEffect(() => {
     let alive = true;
@@ -46,7 +48,13 @@ export default function ReportPage() {
           <h1>{report.verdict}</h1>
           <p className="sub">{report.verdict_reason}</p>
         </div>
-        <Link className="btn btn-ghost" to="/bank/tasks">回到列表</Link>
+        <div className="filters">
+          <div className="tabs small-tabs">
+            <button className={view === 'summary' ? 'active' : ''} onClick={() => setView('summary')}>结论版</button>
+            <button className={view === 'detail' ? 'active' : ''} onClick={() => setView('detail')}>明细版</button>
+          </div>
+          <Link className="btn btn-ghost" to="/bank/tasks">回到列表</Link>
+        </div>
       </header>
 
       <section className="score-row">
@@ -93,6 +101,7 @@ export default function ReportPage() {
         </section>
       ) : null}
 
+      {view === 'detail' ? (
       <section>
         <h2>指标（{report.metrics?.length ?? 0} 项）</h2>
         <div className="scroll">
@@ -113,6 +122,7 @@ export default function ReportPage() {
           </table>
         </div>
       </section>
+      ) : null}
     </div>
   );
 }

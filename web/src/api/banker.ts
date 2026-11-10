@@ -73,6 +73,26 @@ export function listAudit(params: { limit?: number; offset?: number } = {}): Pro
   return request<{ items: AuditRow[]; total: number }>('/audit?' + query.toString());
 }
 
+export type MetricDef = {
+  code: string;
+  name: string;
+  unit: string;
+  group: string;
+  formula: string;
+  inputs: string;
+  viz: string;
+};
+
+export function getMetricDefinitions(): Promise<{ metric_set_version: number; items: MetricDef[] }> {
+  return request<{ metric_set_version: number; items: MetricDef[] }>('/metric-definitions');
+}
+
+export type VerificationDef = { code: string; layer: string; method: string };
+
+export function getVerificationDefinitions(): Promise<{ items: VerificationDef[] }> {
+  return request<{ items: VerificationDef[] }>('/verification-definitions');
+}
+
 export type AppUser = {
   id: number;
   username: string;

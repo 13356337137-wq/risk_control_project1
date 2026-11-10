@@ -240,3 +240,6 @@ tr.clickable:hover { background: #f8fbff; }
 .panel h2 { font-size: 15px; margin: 22px 0 10px; }
 .scroll { max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
 ul.plain { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--muted); display: grid; gap: 6px; }
+.small-tabs { margin-bottom: 0; }
+.small-tabs button { padding: 6px 14px; font-size: 13px; }
+.pager { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
