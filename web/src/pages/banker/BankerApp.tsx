@@ -1,17 +1,26 @@
-import { useNavigate } from 'react-router-dom';
+import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { clearSession, getUser } from '../../auth/store';
+import TaskListPage from './TaskListPage';
+import ReportPage from './ReportPage';
+import AuditPage from './AuditPage';
+import UsersPage from './UsersPage';
+import ComingSoon from '../ComingSoon';
 
 /**
  * 银行侧工作台。
  *
- * 骨架阶段只放导航与占位；任务列表、报告、模板、标注等页面按 M6 方案逐页迁入。
- * 旧页面仍由后端挂在 /bank-old/ 提供。
+ * 侧栏按「受理与报告 / 模板 / 参数 / 系统」分组，和旧版的信息架构保持一致——
+ * 客户经理的心智模型是按任务走的，不是按功能表走的。
+ *
+ * 模板、标注、阈值、实体合并、OCR 路由与看板还没迁完，路由指向占位页并给出旧入口。
  */
 export default function BankerApp() {
   const navigate = useNavigate();
   const user = getUser();
+  const isAdmin = Boolean(user?.is_admin);
+
   return (
-    <div className="shell">
+    <div className="shell with-sider">
       <header className="topbar">
         <div className="brand small">
           <i>风</i>
@@ -20,7 +29,7 @@ export default function BankerApp() {
         <div className="topbar-right">
           <span>
             {user?.display_name || user?.username}
-            {user?.is_admin ? ' · 管理员' : ''}
+            {isAdmin ? ' · 管理员' : ''}
           </span>
           <button
             className="btn btn-ghost"
@@ -33,19 +42,52 @@ export default function BankerApp() {
           </button>
         </div>
       </header>
-      <main className="content">
-        <div className="card">
-          <h1>迁移进行中</h1>
-          <p className="sub">
-            银行侧的受理、报告、模板与标注页面正在逐页迁入。迁移期间请使用旧入口：
-            <a className="inline-link" href="/bank-old/">
-              {' '}旧版银行侧
-            </a>
-            。
-          </p>
-          <p className="sub">导航骨架已就绪，页面按 M6 方案逐页替换，旧地址会做重定向。</p>
-        </div>
-      </main>
+
+      <div className="body">
+        <nav className="sider">
+          <div className="sider-group">
+            <span className="sider-title">受理与报告</span>
+            <NavLink to="/bank/tasks">任务与报告</NavLink>
+          </div>
+          <div className="sider-group">
+            <span className="sider-title">模板</span>
+            <NavLink to="/bank/templates">模板库</NavLink>
+            <NavLink to="/bank/annotate">标注</NavLink>
+          </div>
+          <div className="sider-group">
+            <span className="sider-title">参数</span>
+            <NavLink to="/bank/thresholds">风控参数</NavLink>
+            <NavLink to="/bank/entities">客户与账户</NavLink>
+            <NavLink to="/bank/ocr">OCR 路由</NavLink>
+          </div>
+          {isAdmin ? (
+            <div className="sider-group">
+              <span className="sider-title">系统</span>
+              <NavLink to="/bank/audit">操作审计</NavLink>
+              <NavLink to="/bank/users">账号</NavLink>
+            </div>
+          ) : null}
+        </nav>
+
+        <main className="content">
+          <Routes>
+            <Route index element={<Navigate to="tasks" replace />} />
+            <Route path="tasks" element={<TaskListPage />} />
+            <Route path="report/:id" element={<ReportPage />} />
+            <Route path="audit" element={<AuditPage />} />
+            <Route path="users" element={<UsersPage />} />
+            <Route
+              path="*"
+              element={
+                <ComingSoon
+                  title="这个页面还没迁完"
+                  detail="模板库、标注、风控参数、客户与账户、OCR 路由、看板仍在旧版里，迁移期间请用 /bank-old/ 访问。"
+                />
+              }
+            />
+          </Routes>
+        </main>
+      </div>
     </div>
   );
 }
