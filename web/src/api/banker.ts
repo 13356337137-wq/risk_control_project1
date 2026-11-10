@@ -171,6 +171,36 @@ export function restoreTemplate(id: number): Promise<{ id: number; restored: boo
   return request<{ id: number; restored: boolean }>('/templates/' + id + '/restore', { method: 'POST' });
 }
 
+export type ProbeSuggestion = { field: string; column: string; x: number; y: number };
+export type ProbeResult = {
+  bank_name: string | null;
+  bank_code: string | null;
+  rotation: number;
+  page_size: { width: number; height: number };
+  header_found: boolean;
+  headers: { text: string; x: number; y: number }[];
+  suggestions?: ProbeSuggestion[];
+  table_area?: { x: number; y: number; w: number; h: number; header_y?: number } | null;
+};
+
+export function probeTemplate(file: File, password?: string): Promise<ProbeResult> {
+  const form = new FormData();
+  form.append('file', file);
+  if (password) form.append('password', password);
+  return request<ProbeResult>('/templates/probe', { form, timeoutMs: 180000 });
+}
+
+export function createTemplate(payload: { bank_code: string; field_map: Record<string, unknown> }): Promise<{ id: number; status: string }> {
+  return request<{ id: number; status: string }>('/templates', { body: payload });
+}
+
+export function updateTemplate(
+  id: number,
+  patch: { field_map?: Record<string, unknown>; layout?: unknown },
+): Promise<{ id: number; version: number }> {
+  return request<{ id: number; version: number }>('/templates/' + id, { method: 'PUT', body: patch });
+}
+
 export type AppUser = {
   id: number;
   username: string;

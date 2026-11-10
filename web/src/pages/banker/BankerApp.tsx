@@ -4,6 +4,7 @@ import TaskListPage from './TaskListPage';
 import ReportPage from './ReportPage';
 import AuditPage from './AuditPage';
 import UsersPage from './UsersPage';
+import AnnotatePage from './AnnotatePage';
 import TemplatesPage from './TemplatesPage';
 import TemplateDetailPage from './TemplateDetailPage';
 import TemplateLayoutPage from './TemplateLayoutPage';
@@ -81,6 +82,7 @@ export default function BankerApp() {
             <Route index element={<Navigate to="tasks" replace />} />
             <Route path="tasks" element={<TaskListPage />} />
             <Route path="report/:id" element={<ReportPage />} />
+            <Route path="annotate" element={<AnnotatePage />} />
             <Route path="templates" element={<TemplatesPage />} />
             <Route path="templates/:id" element={<TemplateDetailPage />} />
             <Route path="templates/:id/layout" element={<TemplateLayoutPage />} />
