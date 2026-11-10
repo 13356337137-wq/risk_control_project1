@@ -5,6 +5,7 @@ import ReportPage from './ReportPage';
 import AuditPage from './AuditPage';
 import UsersPage from './UsersPage';
 import AnnotatePage from './AnnotatePage';
+import LabPage from './LabPage';
 import TemplatesPage from './TemplatesPage';
 import TemplateDetailPage from './TemplateDetailPage';
 import TemplateLayoutPage from './TemplateLayoutPage';
@@ -62,6 +63,7 @@ export default function BankerApp() {
           </div>
           <div className="sider-group">
             <span className="sider-title">参数</span>
+            <NavLink to="/bank/lab">特征 Lab</NavLink>
             <NavLink to="/bank/metrics">指标口径</NavLink>
             <NavLink to="/bank/verifications">校验口径</NavLink>
             <NavLink to="/bank/thresholds">风控参数</NavLink>
@@ -86,6 +88,7 @@ export default function BankerApp() {
             <Route path="templates" element={<TemplatesPage />} />
             <Route path="templates/:id" element={<TemplateDetailPage />} />
             <Route path="templates/:id/layout" element={<TemplateLayoutPage />} />
+            <Route path="lab" element={<LabPage />} />
             <Route path="metrics" element={<MetricDefsPage />} />
             <Route path="verifications" element={<VerificationDefsPage />} />
             <Route path="audit" element={<AuditPage />} />
