@@ -116,6 +116,30 @@ def list_samples():
     }
 
 
+@app.get("/api/v1/lab/sample-file")
+def sample_file(sample: str):
+    from fastapi.responses import FileResponse
+
+    path = _sample_path(sample)
+    return FileResponse(path, media_type="application/pdf")
+
+
+@app.get("/api/v1/lab/inspect")
+def inspect_sample(sample: str):
+    from rc_platform.capabilities.layout import inspect as layout_inspect
+
+    data = _sample_path(sample).read_bytes()
+    return layout_inspect.inspect(data)
+
+
+@app.get("/api/v1/lab/spread")
+def spread_keyword(sample: str, keyword: str):
+    from rc_platform.capabilities.layout import inspect as layout_inspect
+
+    data = _sample_path(sample).read_bytes()
+    return layout_inspect.spread(data, keyword)
+
+
 @app.get("/api/v1/lab/custom")
 def list_custom(include_history: bool = False):
     return {"items": lab_store.list_features(include_history=include_history)}

@@ -46,6 +46,50 @@ export function evaluate(sample: string, expr: string): Promise<EvaluateResult> 
   return request<EvaluateResult>('/lab/evaluate', { body: { sample, expr }, timeoutMs: 60000 });
 }
 
+export type InspectCell = { text: string; x0: number; x1: number; y0: number; y1: number };
+export type InspectBand = {
+  field: string;
+  source: string;
+  confidence: number;
+  x0: number;
+  x1: number;
+  cells: InspectCell[];
+};
+export type InspectPage = {
+  index: number;
+  width: number;
+  height: number;
+  lines: number;
+  header_y: number | null;
+  bands: InspectBand[];
+  has_text: boolean;
+};
+export type InspectReport = { pages: InspectPage[]; page_count: number; text_layer: boolean };
+export type SpreadBand = {
+  page: number;
+  keyword: InspectCell;
+  anchor: InspectCell;
+  x0: number;
+  x1: number;
+  cells: InspectCell[];
+  source: string;
+};
+export type SpreadReport = { keyword: string; page_count: number; bands: SpreadBand[] };
+
+export function inspectSample(sample: string): Promise<InspectReport> {
+  return request<InspectReport>('/lab/inspect?sample=' + encodeURIComponent(sample));
+}
+
+export function spreadKeyword(sample: string, keyword: string): Promise<SpreadReport> {
+  return request<SpreadReport>(
+    '/lab/spread?sample=' + encodeURIComponent(sample) + '&keyword=' + encodeURIComponent(keyword),
+  );
+}
+
+export function sampleFileUrl(sample: string): string {
+  return '/api/v1/lab/sample-file?sample=' + encodeURIComponent(sample);
+}
+
 export type CustomFeature = {
   code: string;
   name: string;

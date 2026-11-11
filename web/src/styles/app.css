@@ -295,3 +295,29 @@ ul.plain { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--muted)
   border-radius: 8px; font-family: inherit; font-size: 13px;
 }
 .inline-check { display: flex; gap: 8px; align-items: center; font-size: 13.5px; margin-bottom: 16px; }
+/* ---- 标注画布 ---- */
+.annotate { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; }
+@media (max-width: 1100px) { .annotate { grid-template-columns: 1fr; } }
+.annotate-stage { position: relative; background: #f7f9fc; border: 1px solid var(--line); border-radius: 12px; padding: 12px; overflow: auto; }
+.page-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.page-tabs button { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 4px 10px; font-size: 12.5px; cursor: pointer; font-family: inherit; }
+.page-tabs button.active { background: #eef4ff; border-color: var(--brand); color: var(--brand); }
+.canvas-wrap { position: relative; }
+.canvas-wrap canvas { display: block; width: 100%; height: 100%; box-shadow: 0 1px 6px rgba(15, 23, 42, .12); background: #fff; }
+.band { position: absolute; border: 1.5px solid rgba(37, 99, 235, .45); background: rgba(37, 99, 235, .06); cursor: move; }
+.band.selected { border-color: #2563eb; background: rgba(37, 99, 235, .12); }
+.band-label { position: absolute; top: -18px; left: 0; font-size: 11px; color: #2563eb; white-space: nowrap; background: #fff; padding: 0 3px; border-radius: 3px; }
+.handle { position: absolute; top: 0; width: 8px; height: 100%; cursor: ew-resize; }
+.handle.left { left: -4px; }
+.handle.right { right: -4px; }
+.cell { position: absolute; border: 1px solid rgba(220, 38, 38, .35); background: rgba(220, 38, 38, .05); }
+.annotate-side { display: grid; gap: 12px; align-content: start; }
+.annotate-add { grid-template-columns: 1fr auto; }
+.band-editor { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.band-editor label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+.band-editor select, .band-editor input {
+  height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px;
+  font-family: inherit; font-size: 13px; width: 100%; background: #fff;
+}
+.annotate-list tr { cursor: pointer; }
+.annotate-list tr.active-row { background: #eef4ff; }
