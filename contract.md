@@ -241,3 +241,44 @@
 | 2026-10-31 | 模板创建恢复可用：反验未通过不再硬拦草稿保存（`GET/POST /templates/infer` 增加 valid/saved_invalid，保留 draft_map）；标注页新增「保存为模板草稿」与反验提示 | 算法、后端、银行侧 |
 | 2026-10-31 | 模板删除改为「有引用则软删」：template.deleted_at，DELETE /templates/{id} 返回 soft/used/message；列表默认隐藏已移除，`?include_deleted=true` 可查 | 后端、银行侧 |
 | 2026-10-31 | 任务分析改为后台进程池：POST /tasks 与 /tasks/{id}/reanalyze 立即返回 status=QUEUED，新增 QUEUED 状态；ANALYSIS_BACKEND/ANALYSIS_WORKERS 配置；并发写 metric_value 的死锁加 READ COMMITTED + 重试 | 后端、借款侧、银行侧 |
+---
+
+# 重构线补充（rebuild/v1，2026-11-11）
+
+## 能力契约（不再是「只有 HTTP 接口」）
+
+数据在能力之间按契约流动，契约定义在 `rc_platform/core/contracts.py`：
+
+| 契约 | 生产者 | 消费者 |
+| --- | --- | --- |
+| `document` | 外部输入 | preread / parse / verify |
+| `profile` | `preread.algorithm_compat` | layout / verify.file / verify.compose |
+| `layout` | `layout.anchor_spread` | `parse.layout_v2` |
+| `statement` | `parse.algorithm_compat` / `parse.layout_v2` | layer_content / layer_ledger / layer_external / features / metrics |
+| `layer_file` `layer_content` `layer_ledger` `layer_external` | 四个层能力 | `verify.compose` |
+| `verification` | `verify.compose` / `verify.algorithm_compat` | report |
+| `metrics` | `metrics.algorithm_compat` | report |
+| `features` | `features.derivation` | （指标派生，进行中） |
+| `report` | `report.algorithm_compat` | API |
+
+`document` 是外部输入契约，装配时视为已满足；其余契约必须有能力产出。
+账务层与外部层是 `verify.compose` 的可选依赖：本行没接入时按「未执行」处理，不让整单失败。
+
+## 新增数据表（重构线）
+
+| 表 | 用途 | 约束 |
+| --- | --- | --- |
+| `rc_queue_job` | 任务队列（状态/优先级/租约/重试/死信） | 主键自增；`status` 六态；`lease_until` 过期可回收 |
+
+自定义特征目前存文件（`var/lab/custom_features.json`，按 `code` 版本化），进库前需要补迁移与权限。
+
+## 接口补充
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/v1/lab/operators` | 算子目录（80 个，含参数说明） |
+| `GET /api/v1/lab/features` | 内置特征目录（24 个） |
+| `GET /api/v1/lab/samples` | 可试算的合成样本 |
+| `POST /api/v1/lab/evaluate` | 按表达式或已保存的 `code` 试算 |
+| `GET/POST/DELETE /api/v1/lab/custom` | 自定义特征的列表/保存（版本化）/删除 |
+| `GET /api/v1/health` | 修正：不再被 `/api/{path:path}` 兜底吃成 404 |

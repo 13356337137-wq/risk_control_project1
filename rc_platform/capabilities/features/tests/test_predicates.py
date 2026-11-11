@@ -92,3 +92,20 @@ def test_zscore_threshold_composes_with_count():
     frame = F([row(amount=str(n)) for n in (10, 11, 12, 13, 14, 100)])
     value = eval_expr("count(where=zscore() > 2)", frame)
     assert value == 1
+
+def test_mad_is_median_absolute_deviation():
+    frame = Frame([row(amount=str(n)) for n in (10, 20, 30, 40, 900)])
+    assert pred.op_mad(frame) == Decimal("10")
+
+
+def test_iqr_uses_quantiles():
+    frame = Frame([row(amount=str(n)) for n in (10, 20, 30, 40)])
+    assert pred.op_iqr(frame) == Decimal("15.0")
+
+
+def test_robust_zscore_flags_the_outlier():
+    """长尾样本里 900 应该被挑出来，而普通 3σ 在这种情况下常常挑不出。"""
+    frame = Frame([row(amount=str(n)) for n in (10, 20, 30, 40, 900)])
+    values = [float(v) for v in pred.op_robust_zscore(frame).values]
+    assert values[-1] > 3
+    assert all(abs(value) < 2 for value in values[:-1])

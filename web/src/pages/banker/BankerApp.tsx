@@ -6,6 +6,9 @@ import AuditPage from './AuditPage';
 import UsersPage from './UsersPage';
 import AnnotatePage from './AnnotatePage';
 import LabPage from './LabPage';
+import ThresholdsPage from './ThresholdsPage';
+import EntitiesPage from './EntitiesPage';
+import OcrRoutingPage from './OcrRoutingPage';
 import TemplatesPage from './TemplatesPage';
 import TemplateDetailPage from './TemplateDetailPage';
 import TemplateLayoutPage from './TemplateLayoutPage';
@@ -89,6 +92,9 @@ export default function BankerApp() {
             <Route path="templates/:id" element={<TemplateDetailPage />} />
             <Route path="templates/:id/layout" element={<TemplateLayoutPage />} />
             <Route path="lab" element={<LabPage />} />
+            <Route path="thresholds" element={<ThresholdsPage />} />
+            <Route path="entities" element={<EntitiesPage />} />
+            <Route path="ocr" element={<OcrRoutingPage />} />
             <Route path="metrics" element={<MetricDefsPage />} />
             <Route path="verifications" element={<VerificationDefsPage />} />
             <Route path="audit" element={<AuditPage />} />

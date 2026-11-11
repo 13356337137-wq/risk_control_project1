@@ -201,6 +201,82 @@ export function updateTemplate(
   return request<{ id: number; version: number }>('/templates/' + id, { method: 'PUT', body: patch });
 }
 
+export type ThresholdDef = {
+  key: string;
+  label: string;
+  group: string;
+  kind: string;
+  unit: string;
+  default: string | number | null;
+  minimum: string | number | null;
+  maximum: string | number | null;
+  desc: string;
+  impacts: string[];
+  calibrated: boolean;
+};
+
+export type ThresholdPayload = {
+  version: number;
+  values: Record<string, string | number | null>;
+  defs: ThresholdDef[];
+};
+
+export function getThresholds(): Promise<ThresholdPayload> {
+  return request<ThresholdPayload>('/thresholds');
+}
+
+export function saveThresholds(
+  values: Record<string, string | number | null>,
+  note?: string,
+): Promise<{ version: number; saved_version: number; values: Record<string, string | number | null> }> {
+  return request('/thresholds', { method: 'PUT', body: { values, note } });
+}
+
+export type EntityAccount = {
+  key: string;
+  bank_name: string;
+  bank_code: string;
+  account_masked: string;
+  holders: Record<string, number>;
+  tasks: number[];
+};
+
+export type EntitySubject = {
+  subject: string;
+  accounts?: string[];
+  task_count?: number;
+  [key: string]: unknown;
+};
+
+export type EntitiesPayload = {
+  accounts: EntityAccount[];
+  subjects: EntitySubject[];
+  conflicts: { subject?: string; reason?: string; options?: unknown[] }[];
+  summary: { accounts: number; subjects: number; multi_account_subjects: number; conflicts: number };
+};
+
+export function getEntities(): Promise<EntitiesPayload> {
+  return request<EntitiesPayload>('/entities');
+}
+
+export type OcrRouting = {
+  enabled: boolean;
+  min_images: number;
+  workers: number;
+  model: string;
+  endpoint: string;
+  has_api_key: boolean;
+  credential_ready: boolean;
+};
+
+export function getOcrRouting(): Promise<OcrRouting> {
+  return request<OcrRouting>('/ocr-routing');
+}
+
+export function saveOcrRouting(patch: Partial<OcrRouting> & { api_key?: string }): Promise<OcrRouting> {
+  return request<OcrRouting>('/ocr-routing', { method: 'PUT', body: patch });
+}
+
 export type AppUser = {
   id: number;
   username: string;

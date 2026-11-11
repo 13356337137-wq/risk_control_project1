@@ -218,3 +218,55 @@ def op_amount_between(x, low=None, high=None, *, notes=None):
             ok = False
         values.append(ok)
     return Series(name="amount_between", values=values, frame=None)
+
+@operator("mad", family=NUMERIC, kind="agg", unit="元", compat=False,
+          detail="中位数绝对偏差 median(|x - median|)；对长尾比标准差稳，适合金额分布。",
+          params=[{"name": "column", "type": "str", "default": "amount"}])
+def op_mad(x, *, column="amount", notes=None):
+    rows = _rows_of(x)
+    numbers = sorted(v for v in (_to_decimal(getattr(row, column, None)) for row in rows) if v is not None)
+    if not numbers:
+        return None
+    middle = len(numbers) // 2
+    median = numbers[middle] if len(numbers) % 2 else (numbers[middle - 1] + numbers[middle]) / 2
+    deviations = sorted(abs(n - median) for n in numbers)
+    size = len(deviations)
+    half = size // 2
+    return deviations[half] if size % 2 else (deviations[half - 1] + deviations[half]) / 2
+
+
+@operator("iqr", family=NUMERIC, kind="agg", unit="元", compat=False,
+          detail="四分位距 Q3 - Q1（线性插值口径，与 quantile 一致）。",
+          params=[{"name": "column", "type": "str", "default": "amount"}])
+def op_iqr(x, *, column="amount", notes=None):
+    q1 = op_quantile(x, q=0.25, column=column)
+    q3 = op_quantile(x, q=0.75, column=column)
+    if q1 is None or q3 is None:
+        return None
+    return q3 - q1
+
+
+@operator("robust_zscore", family=NUMERIC, kind="series", unit="无量纲", compat=False,
+          detail="稳健标准分 0.6745*(x-中位数)/MAD；长尾分布下比 zscore 更能挑出真正的离群点。",
+          params=[{"name": "column", "type": "str", "default": "amount"}])
+def op_robust_zscore(x, *, column="amount", notes=None):
+    rows = _rows_of(x)
+    values = [_to_decimal(getattr(row, column, None)) for row in rows]
+    numbers = [v for v in values if v is not None]
+    if len(numbers) < 2:
+        if notes is not None:
+            notes.append("样本不足 2 笔，无法计算分布")
+        return Series(name="robust_zscore", values=[None] * len(values), frame=None)
+    middle = len(numbers) // 2
+    ordered = sorted(numbers)
+    median = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+    deviations = sorted(abs(n - median) for n in ordered)
+    half = len(deviations) // 2
+    mad = deviations[half] if len(deviations) % 2 else (deviations[half - 1] + deviations[half]) / 2
+    if mad == 0:
+        if notes is not None:
+            notes.append("MAD 为 0（多数值相同），稳健标准分无意义")
+        return Series(name="robust_zscore", values=[None] * len(values), frame=None)
+    scale = Decimal("0.6745") / mad
+    return Series(name="robust_zscore",
+                  values=[None if v is None else (v - median) * scale for v in values], frame=None)

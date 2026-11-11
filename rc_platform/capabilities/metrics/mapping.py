@@ -34,7 +34,26 @@ class MetricMapping:
 
 MAPPINGS: dict[str, MetricMapping] = {
     "A01": MetricMapping("A01", "期间收入合计", "sum(amount, where=direction=='in')", scale=2),
-    "A05": MetricMapping("A05", "工资占比", blocked="需「工资」语义分类词库（摘要/对手方规则），属规则层而非算子"),
+    # 语义类：词库已就绪；无命中按旧口径给 0（跑过没命中 = 0，没跑 = none）。
+    # 这条约定由产品定，代码只用 if_else 显式写出来，不藏在算子默认值里。
+    "A05": MetricMapping("A05", "工资占比",
+                         "if_else(count(where=in_lexicon(name='salary')) == 0, 0, "
+                         "sum(amount, where=in_lexicon(name='salary')) / sum(amount, where=direction=='in'))"),
+    # 分母是「全部出账」不是收入：实测 1000/3300.5=0.3030 才和旧口径一致
+    "C07": MetricMapping("C07", "现金提取占比",
+                         "if_else(count(where=in_lexicon(name='cash') and direction=='out') == 0, 0, "
+                         "sum(amount, where=in_lexicon(name='cash') and direction=='out') / "
+                         "sum(amount, where=direction=='out'))"),
+    "E06": MetricMapping("E06", "虚拟币命中率",
+                         "if_else(count(where=in_lexicon(name='crypto')) == 0, 0, "
+                         "count(where=in_lexicon(name='crypto')) / count())"),
+    "E07": MetricMapping("E07", "现金存入占比",
+                         "if_else(count(where=in_lexicon(name='cash') and direction=='in') == 0, 0, "
+                         "sum(amount, where=in_lexicon(name='cash') and direction=='in') / "
+                         "sum(amount, where=direction=='in'))"),
+    "E08": MetricMapping("E08", "第三方支付占比",
+                         "if_else(count(where=in_lexicon(name='third_party')) == 0, 0, "
+                         "sum(amount, where=in_lexicon(name='third_party')) / sum(amount, signed=false))"),
     "C01": MetricMapping("C01", "净流入",
                          "sum(amount, where=direction=='in') - sum(amount, where=direction=='out')", scale=2),
     "C02": MetricMapping("C02", "流入流出比",
@@ -90,8 +109,8 @@ _BLOCKED: dict[str, str] = {
     # 规则/词库类（14 项）：本质不是算子问题，交给「命中词库」能力
     "A05": _TEXT_LIBRARY, "A06": _TEXT_LIBRARY, "B03": _TEXT_LIBRARY, "B04": _TEXT_LIBRARY,
     "B05": _TEXT_LIBRARY, "B06": _TEXT_LIBRARY, "C07": _TEXT_LIBRARY, "D04": _TEXT_LIBRARY,
-    "E03": _TEXT_LIBRARY, "E04": _TEXT_LIBRARY, "E05": _TEXT_LIBRARY, "E06": _TEXT_LIBRARY,
-    "E07": _TEXT_LIBRARY, "E08": _TEXT_LIBRARY,
+    "E03": _TEXT_LIBRARY, "E04": _TEXT_LIBRARY, "E05": _TEXT_LIBRARY,
+
     # 还款分类（2 项）：分类 + 月序列都要
     "B01": _REPAY_CLASS, "B02": _REPAY_CLASS,
     # 序列与算子缺口（4 项）

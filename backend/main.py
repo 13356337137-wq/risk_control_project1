@@ -71,16 +71,6 @@ app.include_router(thresholds.router, prefix=settings.api_prefix)
 app.include_router(ocr_routing.router, prefix=settings.api_prefix)
 
 
-@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-def _api_not_found(path: str):
-    """未匹配的 /api 请求返回 JSON 404（必须注册在所有 API 路由之后）。"""
-    from fastapi.responses import JSONResponse
-
-    return JSONResponse(status_code=404, content={
-        "detail": {"code": "E_NOT_FOUND", "message": f"接口不存在：/api/{path}"}})
-
-
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -89,6 +79,17 @@ def health():
 @app.get("/api/v1/health")
 def health_v1():
     return {"status": "ok"}
+
+
+# 兜底路由必须最后注册：FastAPI 按注册顺序匹配，
+# 之前它排在 /api/v1/health 前面，把健康检查吃成了 404（E_NOT_FOUND）。
+@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+def _api_not_found(path: str):
+    """未匹配的 /api 请求返回 JSON 404（必须注册在所有 API 路由之后）。"""
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(status_code=404, content={
+        "detail": {"code": "E_NOT_FOUND", "message": f"接口不存在：/api/{path}"}})
 
 
 if __name__ == "__main__":
