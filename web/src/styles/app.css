@@ -282,3 +282,11 @@ ul.plain { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--muted)
 .lab-editor:focus { border-color: var(--brand); }
 .lab-examples { display: flex; flex-wrap: wrap; gap: 12px; }
 .lab-result { border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 10px; }
+.lab-custom { grid-template-columns: auto 1fr auto; align-items: center; }
+.lab-actions { display: flex; gap: 8px; }
+.lab-save { display: grid; grid-template-columns: 1fr 1fr 120px auto; gap: 8px; align-items: center; }
+@media (max-width: 900px) { .lab-save { grid-template-columns: 1fr 1fr; } }
+.lab-save input {
+  height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px;
+  font-family: inherit; font-size: 13px; background: #fff; width: 100%;
+}

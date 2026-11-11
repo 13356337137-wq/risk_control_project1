@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  deleteCustom,
   evaluate,
+  evaluateCode,
+  listCustom,
   listFeatures,
   listOperators,
   listSamples,
+  saveCustom,
+  type CustomFeature,
   type EvaluateResult,
   type LabFeature,
   type LabOperator,
@@ -50,7 +55,18 @@ export default function LabPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState('');
-  const [tab, setTab] = useState<'features' | 'operators'>('features');
+  const [tab, setTab] = useState<'features' | 'operators' | 'custom'>('features');
+  const [custom, setCustom] = useState<CustomFeature[]>([]);
+  const [saveCode, setSaveCode] = useState('');
+  const [saveName, setSaveName] = useState('');
+  const [saveUnit, setSaveUnit] = useState('');
+  const [saveNote, setSaveNote] = useState('');
+
+  const reloadCustom = () => {
+    listCustom()
+      .then((data) => setCustom(data.items))
+      .catch((err) => setError(getErrorMessage(err, 'banker')));
+  };
 
   useEffect(() => {
     Promise.all([listOperators(), listFeatures(), listSamples()])
@@ -58,6 +74,7 @@ export default function LabPage() {
         setOperators(ops.items);
         setFeatures(defs.items);
         setSamples(list.items);
+        reloadCustom();
         if (list.items.length && !list.items.some((item) => item.name === sample)) {
           setSample(list.items[0].name);
         }
@@ -74,6 +91,8 @@ export default function LabPage() {
     }
     return out;
   }, [operators, filter]);
+
+  void filter;
 
   const shownFeatures = features.filter(
     (item) => !filter.trim() || item.code.includes(filter.trim()) || item.name.includes(filter.trim()),
@@ -115,16 +134,55 @@ export default function LabPage() {
             <button className={tab === 'operators' ? 'active' : ''} onClick={() => setTab('operators')}>
               算子（{operators.length}）
             </button>
+            <button className={tab === 'custom' ? 'active' : ''} onClick={() => setTab('custom')}>
+              自定义（{custom.length}）
+            </button>
           </div>
           <input
             className="search lab-search"
-            placeholder={tab === 'features' ? '搜索特征' : '搜索算子'}
+            placeholder={tab === 'features' ? '搜索特征' : tab === 'operators' ? '搜索算子' : '搜索自定义特征'}
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
           />
 
           <div className="lab-list">
-            {tab === 'features'
+            {tab === 'custom' ? (
+              custom.length ? (
+                custom.map((item) => (
+                  <div key={item.code} className="lab-item lab-custom">
+                    <span className="lab-code">{item.code}</span>
+                    <span className="lab-name">{item.name} · v{item.version}</span>
+                    <span className="lab-actions">
+                      <button className="link-btn" onClick={() => { setExpr(item.expr); setSample(sample); }}>
+                        填入
+                      </button>
+                      <button
+                        className="link-btn"
+                        onClick={() => {
+                          evaluateCode(sample, item.code)
+                            .then(setResult)
+                            .catch((err) => setError(getErrorMessage(err, 'banker')));
+                        }}
+                      >
+                        运行
+                      </button>
+                      <button
+                        className="link-btn danger"
+                        onClick={() => {
+                          deleteCustom(item.code)
+                            .then(reloadCustom)
+                            .catch((err) => setError(getErrorMessage(err, 'banker')));
+                        }}
+                      >
+                        删除
+                      </button>
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <p className="muted small">还没有自定义特征。在右边写好表达式后点「保存为特征」。</p>
+              )
+            ) : tab === 'features'
               ? shownFeatures.map((item) => (
                   <button
                     key={item.code}
@@ -183,6 +241,28 @@ export default function LabPage() {
               </button>
             ))}
           </div>
+
+          <div className="lab-save">
+            <input placeholder="编号（如 out_night_share）" value={saveCode} onChange={(e) => setSaveCode(e.target.value)} />
+            <input placeholder="名称（如 夜间出账占比）" value={saveName} onChange={(e) => setSaveName(e.target.value)} />
+            <input placeholder="单位（可空）" value={saveUnit} onChange={(e) => setSaveUnit(e.target.value)} />
+            <Button
+              onClick={() => {
+                saveCustom({ code: saveCode, name: saveName, expr, unit: saveUnit })
+                  .then(() => {
+                    setSaveNote('已保存：' + saveCode + '（新版本会顶替旧版本，旧版本保留在历史里）');
+                    setSaveCode('');
+                    setSaveName('');
+                    setSaveUnit('');
+                    reloadCustom();
+                  })
+                  .catch((err) => setSaveNote(getErrorMessage(err, 'banker')));
+              }}
+            >
+              保存为特征
+            </Button>
+          </div>
+          {saveNote ? <p className="muted small">{saveNote}</p> : null}
 
           {result ? (
             <div className="lab-result">

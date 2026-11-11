@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from . import operators as ops
 from . import math_ops  # noqa: F401  注册数学与微积分算子
+from . import predicates  # noqa: F401  注册行级/分布级比较（mask）算子
 from .defs import BUILTIN_FEATURES, FeatureDef, builtin_features
 from ..metrics import ops_metrics  # noqa: F401  注册指标口径算子（覆盖月、日终余额、分组二次聚合）
 

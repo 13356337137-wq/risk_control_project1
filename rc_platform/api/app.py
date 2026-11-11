@@ -23,6 +23,7 @@ from rc_platform.core.context import JobContext
 from rc_platform.core.contracts import DocumentProfile, SourceDocument
 from rc_platform.core.pipeline import Pipeline
 from rc_platform.core.registry import default_registry
+from rc_platform.lab import store as lab_store
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SAMPLES = ROOT / "algorithm" / "inputs" / "samples" / "synthetic"
@@ -40,7 +41,16 @@ _STATEMENT_CACHE: dict[str, Any] = {}
 
 class EvaluateRequest(BaseModel):
     sample: str
+    expr: str | None = None
+    code: str | None = None        # 也可以直接跑一条已保存的自定义特征
+
+
+class CustomFeatureRequest(BaseModel):
+    code: str
+    name: str
     expr: str
+    unit: str = ""
+    description: str = ""
 
 
 def _sample_path(name: str) -> pathlib.Path:
@@ -106,13 +116,42 @@ def list_samples():
     }
 
 
+@app.get("/api/v1/lab/custom")
+def list_custom(include_history: bool = False):
+    return {"items": lab_store.list_features(include_history=include_history)}
+
+
+@app.post("/api/v1/lab/custom")
+def save_custom(request: CustomFeatureRequest):
+    try:
+        return lab_store.save_feature(
+            request.code, request.name, request.expr, unit=request.unit, description=request.description
+        )
+    except lab_store.LabFeatureError as exc:
+        raise HTTPException(422, detail={"code": "E_FEATURE", "message": str(exc)}) from exc
+
+
+@app.delete("/api/v1/lab/custom/{code}")
+def delete_custom(code: str):
+    return {"code": code, "deleted": lab_store.delete_feature(code)}
+
+
 @app.post("/api/v1/lab/evaluate")
 def evaluate(request: EvaluateRequest):
+    expression = request.expr
+    if not expression and request.code:
+        record = lab_store.current(request.code)
+        if record is None:
+            raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": f"没有这条自定义特征：{request.code}"})
+        expression = record["expr"]
+    if not expression:
+        raise HTTPException(422, detail={"code": "E_PARAM", "message": "expr 与 code 至少给一个"})
+
     statement = _statement(request.sample)
     frame = Frame(list(statement.rows))
     notes: list[str] = []
     try:
-        value = expr_mod.eval_expr(request.expr, frame, notes=notes)
+        value = expr_mod.eval_expr(expression, frame, notes=notes)
     except expr_mod.ExprError as exc:
         raise HTTPException(422, detail={"code": "E_EXPR", "message": str(exc)}) from exc
     except Exception as exc:  # noqa: BLE001 - 算子层面的错误要原样告诉调用方
@@ -123,6 +162,7 @@ def evaluate(request: EvaluateRequest):
         preview = [_json_safe(item) for item in value.values[:20]]
 
     return {
+        "expr": expression,
         "value": _json_safe(value),
         "type": type(value).__name__,
         "notes": notes,
