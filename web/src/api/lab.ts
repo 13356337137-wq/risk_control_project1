@@ -86,16 +86,18 @@ export function spreadKeyword(sample: string, keyword: string): Promise<SpreadRe
   );
 }
 
-export function inspectFile(file: Blob): Promise<InspectReport> {
+export function inspectFile(file: Blob, password?: string): Promise<InspectReport> {
   const form = new FormData();
   form.append('file', file, 'upload.pdf');
+  if (password) form.append('password', password);
   return request<InspectReport>('/lab/inspect-file', { form, timeoutMs: 180000 });
 }
 
-export function spreadFile(file: Blob, keyword: string): Promise<SpreadReport> {
+export function spreadFile(file: Blob, keyword: string, password?: string): Promise<SpreadReport> {
   const form = new FormData();
   form.append('file', file, 'upload.pdf');
   form.append('keyword', keyword);
+  if (password) form.append('password', password);
   return request<SpreadReport>('/lab/spread-file', { form, timeoutMs: 180000 });
 }
 

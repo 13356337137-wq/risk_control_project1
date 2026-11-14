@@ -112,6 +112,19 @@ def is_password_protected(file_bytes: bytes) -> bool:
         doc.close()
 
 
+def password_opens(file_bytes: bytes, password: str) -> bool:
+    """给的口令能不能打开这份 PDF。上传时就该判定，而不是受理后再失败。"""
+    if file_bytes[:4] != b"%PDF":
+        return True
+    doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    try:
+        if not doc.needs_pass:
+            return True
+        return doc.authenticate(password) > 0
+    finally:
+        doc.close()
+
+
 def run_analysis(
     file_bytes: bytes,
     *,

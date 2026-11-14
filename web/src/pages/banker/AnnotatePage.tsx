@@ -47,6 +47,8 @@ export default function AnnotatePage() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [password, setPassword] = useState('');
+  const [needPassword, setNeedPassword] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -84,12 +86,15 @@ export default function AnnotatePage() {
     return () => URL.revokeObjectURL(url);
   }, [source]);
 
-  const loadLayout = useCallback(async (current: Source) => {
+  const loadLayout = useCallback(async (current: Source, secret?: string) => {
     setBusy(true);
     setError('');
     setMessage('');
     try {
-      const report = current.kind === 'sample' ? await inspectSample(current.sample) : await inspectFile(current.blob);
+      const report =
+        current.kind === 'sample'
+          ? await inspectSample(current.sample)
+          : await inspectFile(current.blob, secret ?? password);
       setPages(report.pages);
       setPageIndex(0);
       setDrafts(toDrafts(report.pages[0]));
@@ -99,15 +104,23 @@ export default function AnnotatePage() {
           (report.text_layer ? '' : '（这份文件没有文字层，需要走 OCR）'),
       );
     } catch (err) {
+      // 加密件：不报「分析失败」，直接要口令（pymupdf 原文 No password given 用户看不懂）
+      const code = (err as { code?: string }).code;
+      if (code === 'E_ENCRYPT') setNeedPassword(true);
       setError(getErrorMessage(err, 'banker'));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [password]);
 
   useEffect(() => {
-    if (source) void loadLayout(source);
-  }, [source, loadLayout]);
+    if (source) {
+      setNeedPassword(false);
+      setPassword('');
+      void loadLayout(source, '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source]);
 
   const page = pages[pageIndex];
   const scale = fitScale * zoom;
@@ -119,7 +132,7 @@ export default function AnnotatePage() {
     (async () => {
       const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
       pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-      const doc = await pdfjs.getDocument({ url: pdfUrl }).promise;
+      const doc = await pdfjs.getDocument({ url: pdfUrl, password: password || undefined }).promise;
       const pdfPage = await doc.getPage(pageIndex + 1);
       const base = pdfPage.getViewport({ scale: 1 });
       const containerWidth = stageRef.current?.clientWidth ?? 800;
@@ -139,13 +152,19 @@ export default function AnnotatePage() {
     })().catch((err: unknown) => {
       const text = err instanceof Error ? err.message : String(err);
       if (text.includes('cancel')) return;
+      // pdf.js 对加密件的原文就是 No password given，翻成人话并弹出口令框
+      if (text.includes('password') || text.includes('Password')) {
+        setNeedPassword(true);
+        setError('这份 PDF 设有打开口令，请输入口令。');
+        return;
+      }
       setError('PDF 渲染失败：' + text);
     });
     return () => {
       cancelled = true;
       renderTaskRef.current?.cancel();
     };
-  }, [page, pageIndex, pdfUrl, zoom]);
+  }, [page, pageIndex, pdfUrl, zoom, password]);
 
   const toPage = (clientX: number) => {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -326,6 +345,23 @@ export default function AnnotatePage() {
           </select>
         </label>
       </div>
+
+      {needPassword ? (
+        <div className="lab-save password-bar">
+          <input
+            type="password"
+            placeholder="这份 PDF 的打开口令"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && source) void loadLayout(source, password);
+            }}
+          />
+          <Button disabled={busy || !password.trim()} onClick={() => source && void loadLayout(source, password)}>
+            用这个口令打开
+          </Button>
+        </div>
+      ) : null}
 
       {error ? <Notice>{error}</Notice> : null}
       {message ? <Notice tone="ok">{message}</Notice> : null}

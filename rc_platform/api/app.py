@@ -244,26 +244,32 @@ def list_samples():
 
 
 @app.post("/api/v1/lab/inspect-file")
-async def inspect_upload(file: UploadFile):
+async def inspect_upload(file: UploadFile, password: str | None = Form(None)):
     from rc_platform.capabilities.layout import inspect as layout_inspect
 
     data = await file.read()
     if not data:
         raise HTTPException(400, detail={"code": "E_PARAM", "message": "文件为空"})
     try:
-        return layout_inspect.inspect(data)
+        return layout_inspect.inspect(data, password)
+    except ValueError as exc:
+        # 口令问题单独一个码：前端据此弹口令输入框，而不是报「版式分析失败」
+        raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(422, detail={"code": "E_INSPECT", "message": f"版式分析失败：{exc}"}) from exc
 
 
 @app.post("/api/v1/lab/spread-file")
-async def spread_upload(file: UploadFile, keyword: str = Form(...)):
+async def spread_upload(file: UploadFile, keyword: str = Form(...), password: str | None = Form(None)):
     from rc_platform.capabilities.layout import inspect as layout_inspect
 
     data = await file.read()
     if not data:
         raise HTTPException(400, detail={"code": "E_PARAM", "message": "文件为空"})
-    return layout_inspect.spread(data, keyword)
+    try:
+        return layout_inspect.spread(data, keyword, password=password)
+    except ValueError as exc:
+        raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
 
 
 @app.get("/api/v1/lab/sample-file")

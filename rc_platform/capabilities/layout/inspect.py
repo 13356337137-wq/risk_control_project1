@@ -137,8 +137,8 @@ def _page_report(index: int, page: PageWords, region) -> dict:
     }
 
 
-def inspect(data: bytes) -> dict:
-    pages = read_pages(data)
+def inspect(data: bytes, password: str | None = None) -> dict:
+    pages = read_pages(data, password)
     tokens = _tokens(pages)
     reports = []
     for index, page in enumerate(pages):
@@ -155,7 +155,7 @@ def inspect(data: bytes) -> dict:
     }
 
 
-def spread(data: bytes, keyword: str, page_index: int | None = None) -> dict:
+def spread(data: bytes, keyword: str, page_index: int | None = None, password: str | None = None) -> dict:
     """按关键词扩散出一列。
 
     典型用法是「卡号」：它可能出现在表头单元格里（卡号 | 6222…），
@@ -163,7 +163,7 @@ def spread(data: bytes, keyword: str, page_index: int | None = None) -> dict:
       - 同行右侧有值 -> 先收下这个值，再以它的中心往下扩
       - 同行右侧没值 -> 以关键词自己的中心往下扩
     """
-    pages = read_pages(data)
+    pages = read_pages(data, password)
     tokens = _tokens(pages)
     hits: list[dict] = []
 

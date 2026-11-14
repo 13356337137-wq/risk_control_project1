@@ -208,6 +208,15 @@ def create_task(
             raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": "PDF 需要打开口令"})
         if _password_failure_count(db, password_file.id) >= PASSWORD_ATTEMPT_LIMIT:
             raise HTTPException(429, detail={"code": "E_LIMIT", "message": "该材料口令尝试次数已达上限"})
+        # 口令当场验：错口令如果也受理，会生成一个注定失败的任务，用户要等几分钟才知道
+        from services.analysis import password_opens
+
+        if not password_opens(data, password):
+            _record_password_attempt(
+                db, file_id=password_file.id, file_name=file_name, outcome="failed",
+            )
+            db.commit()
+            raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": "口令不正确，请重新输入"})
 
     template = None
     template_row = None

@@ -397,3 +397,5 @@ ul.plain { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--muted)
 .stage-tools button.active { background: #eef4ff; border-color: var(--brand); color: var(--brand); }
 .canvas-wrap { background: #fff; }
 .canvas-wrap canvas { box-shadow: 0 2px 12px rgba(15, 23, 42, .18); }
+/* 表格里被定位到的行（证据「看这笔」、标注列表选中） */
+table.grid tr.active-row { background: #fff7e6; box-shadow: inset 3px 0 0 #f59e0b; }

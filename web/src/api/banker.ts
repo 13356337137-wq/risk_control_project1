@@ -50,7 +50,13 @@ export type ReportPayload = {
   metric_set_version?: number;
   threshold_version?: number;
   conclusions?: { code: string; message: string; level: string }[];
-  evidence?: unknown[];
+  evidence?: {
+    rule_code?: string;
+    page_no?: number;
+    txn_id?: number;
+    x?: number;
+    y?: number;
+  }[];
   materials?: { role: string; pages: number; sha256?: string | null; file_id?: number }[];
   self_check?: Record<string, unknown> | null;
   verification?: unknown;

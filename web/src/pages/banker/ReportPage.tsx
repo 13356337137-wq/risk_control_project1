@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getReport, getTransactions, type ReportPayload, type TxnRow } from '../../api/banker';
 import { getErrorMessage } from '../../api/errors';
@@ -37,6 +37,9 @@ export default function ReportPage() {
   const [txns, setTxns] = useState<TxnRow[] | null>(null);
   const [txnPage, setTxnPage] = useState(0);
   const [keyword, setKeyword] = useState('');
+  // 证据里的 txn_id 是「第几笔」（1 起），不是数据库 id —— 后端生成证据时用的是 range(1, n+1)
+  const [highlightRow, setHighlightRow] = useState<number | null>(null);
+  const highlightRef = useRef<HTMLTableRowElement | null>(null);
   const PAGE = 100;
 
   useEffect(() => {
@@ -69,6 +72,13 @@ export default function ReportPage() {
     }
     return out;
   }, [metrics]);
+
+  // 证据跳过来时把那一行滚到视野中间，否则「看这笔」看起来像没反应
+  useEffect(() => {
+    if (tab === 'txns' && highlightRef.current) {
+      highlightRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [tab, highlightRow, txnPage, txns]);
 
   const filteredTxns = useMemo(() => {
     const rows = txns ?? [];
@@ -215,9 +225,45 @@ export default function ReportPage() {
           <section>
             <h2>证据（{report.evidence?.length ?? 0}）</h2>
             {report.evidence?.length ? (
-              <ul className="plain">
-                {report.evidence.map((item, index) => <li key={index}>{String(item)}</li>)}
-              </ul>
+              <>
+                <p className="muted small">
+                  每条证据 = 一次命中的位置：哪条规则、第几页、哪一笔、在页面上的坐标。点「看这笔」跳到交易流水。
+                </p>
+                <table className="grid compact">
+                  <thead><tr><th>规则</th><th>页</th><th>笔号</th><th>位置</th><th /></tr></thead>
+                  <tbody>
+                    {report.evidence.map((raw, index) => {
+                      const item = (raw ?? {}) as { rule_code?: string; page_no?: number; txn_id?: number; x?: number; y?: number };
+                      return (
+                        <tr key={index}>
+                          <td>{item.rule_code ?? '—'}</td>
+                          <td className="small muted">{item.page_no ?? '—'}</td>
+                          <td className="small muted">{item.txn_id ?? '—'}</td>
+                          <td className="small muted">
+                            {item.x === undefined ? '—' : Math.round(item.x) + ', ' + Math.round(item.y ?? 0) + ' pt'}
+                          </td>
+                          <td>
+                            {item.txn_id ? (
+                              <button
+                                className="link-btn"
+                                onClick={() => {
+                                  const rowNo = item.txn_id ?? null;
+                                  setHighlightRow(rowNo);
+                                  setKeyword('');
+                                  if (rowNo) setTxnPage(Math.floor((rowNo - 1) / PAGE));
+                                  setTab('txns');
+                                }}
+                              >
+                                看这笔
+                              </button>
+                            ) : null}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </>
             ) : (
               <p className="muted small">这份报告没有独立证据条目（证据都并进了四层核验的说明里）。</p>
             )}
@@ -261,8 +307,12 @@ export default function ReportPage() {
               <tr><th>日期</th><th>方向</th><th>金额</th><th>余额</th><th>摘要</th><th>对方</th><th>页</th></tr>
             </thead>
             <tbody>
-              {filteredTxns.slice(txnPage * PAGE, txnPage * PAGE + PAGE).map((row) => (
-                <tr key={row.id}>
+              {filteredTxns.slice(txnPage * PAGE, txnPage * PAGE + PAGE).map((row, offset) => (
+                <tr
+                  key={row.id}
+                  ref={highlightRow === txnPage * PAGE + offset + 1 ? highlightRef : undefined}
+                  className={highlightRow === txnPage * PAGE + offset + 1 ? 'active-row' : ''}
+                >
                   <td className="small">{row.txn_date ?? '—'}</td>
                   <td className="small">{row.direction === 'in' ? '入' : row.direction === 'out' ? '出' : '—'}</td>
                   <td>{row.amount ?? '—'}</td>

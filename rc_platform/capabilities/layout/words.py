@@ -98,10 +98,21 @@ def merge_tokens(line: Line, gap: float = 2.0) -> list[Word]:
     return tokens
 
 
-def read_pages(data: bytes) -> list[PageWords]:
-    """读 PDF 每页的词。没有文本层时 words 为空、has_text=False。"""
+def read_pages(data: bytes, password: str | None = None) -> list[PageWords]:
+    """读 PDF 每页的词。没有文本层时 words 为空、has_text=False。
+
+    加密件必须带口令：pymupdf 在没认证时读页会抛「No password given」，
+    这个字符串会一路冒到界面上，用户看不懂，所以在入口就转成可读的错误。
+    """
     pages: list[PageWords] = []
     doc = pymupdf.open(stream=data, filetype="pdf")
+    if doc.needs_pass:
+        if not password:
+            doc.close()
+            raise ValueError("PDF 设有打开口令，请输入口令后再分析")
+        if doc.authenticate(password) <= 0:
+            doc.close()
+            raise ValueError("口令不正确，请重新输入")
     try:
         for page_no in range(doc.page_count):
             page = doc[page_no]
