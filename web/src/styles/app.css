@@ -376,3 +376,7 @@ ul.plain { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--muted)
   height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px;
   font-family: inherit; font-size: 13px; width: 100%; background: #fff;
 }
+.lab-api { margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; background: #fff; }
+.lab-api summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.lab-api[open] summary { margin-bottom: 10px; }
+.lab-api code { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }

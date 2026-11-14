@@ -12,7 +12,7 @@ import pathlib
 from decimal import Decimal
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -65,7 +65,12 @@ def _statement(name: str):
     if name in _STATEMENT_CACHE:
         return _STATEMENT_CACHE[name]
     path = _sample_path(name)
-    data = path.read_bytes()
+    statement = _statement_from_bytes(path.read_bytes(), name)
+    _STATEMENT_CACHE[name] = statement
+    return statement
+
+
+def _statement_from_bytes(data: bytes, name: str):
     registry = default_registry()
     plan = registry.plan("statement", overrides={"statement": "parse.layout_v2"})
     result = Pipeline(registry, plan, on_error="degrade").run(
@@ -74,8 +79,7 @@ def _statement(name: str):
     )
     statement = result.get("statement")
     if statement is None:
-        raise HTTPException(422, detail={"code": "E_PARSE", "message": "这份样本解析失败：" + "；".join(result.degradation)})
-    _STATEMENT_CACHE[name] = statement
+        raise HTTPException(422, detail={"code": "E_PARSE", "message": "这份文件解析失败：" + "；".join(result.degradation)})
     return statement
 
 
@@ -89,6 +93,129 @@ def _json_safe(value):
     if isinstance(value, dict):
         return {key: _json_safe(item) for key, item in value.items()}
     return value
+
+
+# --------------------------------------------------------------------------
+# 特征 API：把「所有特征」做成对外接口
+#
+# 三层：目录（有哪些）/ 详情（怎么算）/ 计算（算出值）。
+# 内置 24 个与自定义特征走同一套返回结构，调用方不需要知道哪个是内置的。
+# --------------------------------------------------------------------------
+
+
+class ComputeRequest(BaseModel):
+    codes: list[str] | None = None            # 空 = 全部
+    rows: list[dict[str, Any]] | None = None  # 直接给交易行，省一次解析
+    sample: str | None = None                 # 或给合成样本名（仅本地试用）
+
+
+def _feature_defs():
+    from rc_platform.capabilities.features.defs import FeatureDef, builtin_features
+
+    defs = list(builtin_features())
+    for record in lab_store.list_features():
+        try:
+            defs.append(FeatureDef(code=record["code"], name=record["name"], expr=record["expr"],
+                                   unit=record.get("unit") or "", version=str(record.get("version", 1))))
+        except Exception:  # noqa: BLE001 - 坏定义不该让整个目录挂掉
+            continue
+    return defs
+
+
+def _rows_from_payload(rows: list[dict[str, Any]]):
+    from decimal import Decimal
+
+    from rc_platform.core.contracts import TxnRow
+
+    out = []
+    for raw in rows:
+        amount = raw.get("amount")
+        balance = raw.get("balance")
+        out.append(
+            TxnRow(
+                txn_date=raw.get("txn_date"),
+                trade_time=raw.get("trade_time"),
+                reference_no=raw.get("reference_no"),
+                summary=raw.get("summary"),
+                counterparty_name=raw.get("counterparty_name") or raw.get("counterparty"),
+                direction=raw.get("direction"),
+                amount=None if amount in (None, "") else Decimal(str(amount)),
+                balance=None if balance in (None, "") else Decimal(str(balance)),
+            )
+        )
+    return out
+
+
+@app.get("/api/v1/features")
+def list_feature_defs():
+    from rc_platform.capabilities.features.defs import compute  # noqa: F401  确保包已注册算子
+
+    items = []
+    for definition in _feature_defs():
+        try:
+            items.append(definition.describe())
+        except Exception:  # noqa: BLE001
+            continue
+    return {"count": len(items), "items": items}
+
+
+@app.get("/api/v1/features/{code}")
+def get_feature_def(code: str):
+    for definition in _feature_defs():
+        if definition.code == code:
+            return definition.describe()
+    raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": f"没有这个特征：{code}"})
+
+
+@app.post("/api/v1/features/compute")
+def compute_features(request: ComputeRequest):
+    """给一批交易行（或一份合成样本）算特征；算不出来的把原因写在 reason 里。"""
+    from rc_platform.capabilities.features.defs import compute
+    from rc_platform.core.contracts import Statement
+
+    if request.rows is None and request.sample is None:
+        raise HTTPException(422, detail={"code": "E_PARAM", "message": "rows 与 sample 至少给一个"})
+
+    rows = _rows_from_payload(request.rows) if request.rows is not None else list(_statement(request.sample).rows)
+    defs = _feature_defs()
+    if request.codes:
+        wanted = set(request.codes)
+        defs = [item for item in defs if item.code in wanted]
+        missing = wanted - {item.code for item in defs}
+        if missing:
+            raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "没有这些特征：" + "、".join(sorted(missing))})
+
+    result = compute(defs, Statement(rows=rows))
+    return {
+        "rows": len(rows),
+        "count": len(result.records),
+        "version": result.version,
+        "features": [
+            {**record, "value": _json_safe(record.get("value"))} for record in result.records
+        ],
+    }
+
+
+@app.post("/api/v1/features/compute-file")
+async def compute_features_from_file(file: UploadFile, codes: str | None = Form(None)):
+    """上传一份流水（PDF）直接算特征：解析 + 计算一次完成。"""
+    from rc_platform.capabilities.features.defs import compute
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "文件为空"})
+    statement = _statement_from_bytes(data, file.filename or "upload.pdf")
+    defs = _feature_defs()
+    if codes:
+        wanted = {item.strip() for item in codes.split(",") if item.strip()}
+        defs = [item for item in defs if item.code in wanted]
+    result = compute(defs, statement)
+    return {
+        "rows": len(statement.rows),
+        "count": len(result.records),
+        "version": result.version,
+        "features": [{**record, "value": _json_safe(record.get("value"))} for record in result.records],
+    }
 
 
 @app.get("/api/v1/lab/operators")

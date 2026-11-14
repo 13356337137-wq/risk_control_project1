@@ -40,6 +40,10 @@ const COLUMNS = [
   { name: 'dow', note: '星期（0 = 周一）' },
 ];
 
+const CURL_EXAMPLE = `curl -X POST http://127.0.0.1:8020/api/v1/features/compute \
+  -H "Content-Type: application/json" \
+  -d '{"codes":["f_txn_count","f_in_total"],"rows":[{"txn_date":"2026-01-05","amount":"1000","direction":"in"}]}'`;
+
 const NOTES = [
   "聚合要带 where：count(where=direction=='out')，不写 where 就是全部行。",
   "文本要用引号：in_lexicon(name='salary')、contains(word='工资')。",
@@ -146,6 +150,21 @@ export default function LabPage() {
       </header>
 
       {error ? <Notice>{error}</Notice> : null}
+
+      <details className="lab-api">
+        <summary>特征 API（目录 / 详情 / 计算，含自定义特征）</summary>
+        <table className="grid compact">
+          <thead><tr><th>方法</th><th>路径</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td>GET</td><td><code>/api/v1/features</code></td><td>全部特征目录（内置 + 自定义）</td></tr>
+            <tr><td>GET</td><td><code>/api/v1/features/&#123;code&#125;</code></td><td>单个特征的定义与表达式</td></tr>
+            <tr><td>POST</td><td><code>/api/v1/features/compute</code></td><td>给交易行或样本，算全部/指定特征</td></tr>
+            <tr><td>POST</td><td><code>/api/v1/features/compute-file</code></td><td>直接传 PDF，解析 + 计算一次完成</td></tr>
+            <tr><td>POST</td><td><code>/api/v1/lab/evaluate</code></td><td>试算一条表达式（返回单值）</td></tr>
+          </tbody>
+        </table>
+        <pre className="json-box">{CURL_EXAMPLE}</pre>
+      </details>
 
       <div className="lab">
         <aside className="lab-side">
