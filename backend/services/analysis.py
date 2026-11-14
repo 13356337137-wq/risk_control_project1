@@ -112,6 +112,35 @@ def is_password_protected(file_bytes: bytes) -> bool:
         doc.close()
 
 
+def plain_bytes(file_bytes: bytes, password: str | None) -> bytes:
+    """加密 PDF 用口令解出一份可解析的明文副本；非加密件原样返回。
+
+    为什么必须有这一步：算法侧的 parse 只认明文，直接喂加密字节能"成功"返回 0 笔
+    （它会吞掉 pymupdf 的加密异常），于是模板试跑显示"0 笔"而入口还报了成功。
+    """
+    if file_bytes[:4] != b"%PDF":
+        return file_bytes
+    doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    try:
+        if not doc.needs_pass:
+            return file_bytes
+        if not password:
+            raise EncryptedFile("PDF 设有打开口令，请输入口令后再分析")
+        if doc.authenticate(password) <= 0:
+            raise EncryptedFile("口令不正确，请重新输入")
+        # 临时文件用随机名：并发解析两份加密件时固定名会互相覆盖
+        import uuid
+
+        tmp = Path(tempfile.gettempdir()) / f"plain_{uuid.uuid4().hex}.pdf"
+        doc.save(tmp, encryption=pymupdf.PDF_ENCRYPT_NONE)
+        try:
+            return tmp.read_bytes()
+        finally:
+            tmp.unlink(missing_ok=True)
+    finally:
+        doc.close()
+
+
 def password_opens(file_bytes: bytes, password: str) -> bool:
     """给的口令能不能打开这份 PDF。上传时就该判定，而不是受理后再失败。"""
     if file_bytes[:4] != b"%PDF":
@@ -144,14 +173,12 @@ def run_analysis(
         pages = doc.page_count
         if doc.needs_pass:
             password_protected = True
-            if not password or doc.authenticate(password) <= 0:
-                raise EncryptedFile("PDF 需要打开口令")
-            tmp = Path(tempfile.gettempdir()) / "backend_plain.pdf"
-            doc.save(tmp, encryption=pymupdf.PDF_ENCRYPT_NONE)
-            raw = tmp.read_bytes()
+            doc.close()
+            raw = plain_bytes(file_bytes, password)      # 加密件解成明文副本，算法侧只认明文
             doc = pymupdf.open(stream=raw, filetype="pdf")
         text_len = sum(len(doc[i].get_text("text").strip()) for i in range(doc.page_count))
         has_text = text_len > 50 * doc.page_count
+        doc.close()          # 解析要用 bytes，doc 只用来数页与判断有没有文字层，用完就关
     carrier = "electronic" if has_text else "image"
 
     tpl = None

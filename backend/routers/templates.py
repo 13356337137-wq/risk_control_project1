@@ -542,13 +542,13 @@ def preview_template(template_id: int, file: UploadFile = File(...), password: s
         raise HTTPException(400, "文件为空")
     from algorithm.ocr.models import Template as ParseTemplate
     from algorithm.ocr.parse import parse
-    raw = data
-    if data[:4] == b"%PDF":
-        import pymupdf
-        doc = pymupdf.open(stream=data, filetype="pdf")
-        if doc.needs_pass:
-            if not password or doc.authenticate(password) <= 0:
-                raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": "PDF 需要打开口令"})
+    # 加密件必须先解成明文副本：算法侧 parse 只认明文，直接喂加密字节会"成功"返回 0 笔
+    from services.analysis import EncryptedFile, plain_bytes  # noqa: PLC0415
+
+    try:
+        raw = plain_bytes(data, password)
+    except EncryptedFile as exc:
+        raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
     # 必须带 layout：不带的话列边界只能按表头词中心推算，试跑结果与真实解析不一致
     tpl = ParseTemplate(bank_code=row.bank_code, version=row.version,
                         field_map=dict(row.field_map or {}), layout=row.layout)
