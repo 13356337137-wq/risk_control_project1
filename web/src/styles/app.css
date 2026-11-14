@@ -409,3 +409,22 @@ table.grid tr.active-row { background: #fff7e6; box-shadow: inset 3px 0 0 #f59e0
 .score-value.bad { color: #b91c1c; }
 .chip-on { background: #eef4ff; border-color: var(--brand); color: var(--brand); font-weight: 600; }
 .chip:disabled { opacity: .55; cursor: not-allowed; }
+/* 标注三步：打开 → 确认列 → 保存 */
+.start-box { border: 1px dashed var(--line); border-radius: 14px; padding: 28px; text-align: center; background: #fbfdff; }
+.start-box h2 { font-size: 17px; margin: 0 0 6px; }
+.big-file {
+  display: inline-block; margin: 16px 0; padding: 12px 22px; border-radius: 10px;
+  background: var(--brand); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.big-file input { display: none; }
+.start-alt { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+.start-alt label { display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.start-alt select {
+  height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px;
+  font-family: inherit; font-size: 13px; background: #fff; min-width: 200px;
+}
+.step-row { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+.step-done { font-size: 13px; color: #047857; }
+.step-head { display: grid; gap: 2px; margin: 4px 0 6px; }
+.band-preview { font-size: 12px; color: var(--muted); margin: 0 0 4px 22px; }
+.band-item .band-preview { padding: 0 10px 6px 22px; margin: 0; }

@@ -11,72 +11,72 @@ import {
   type InspectPage,
   type LabSample,
 } from '../../api/lab';
-import { createTemplate, getTaskFile, listTasks, updateTemplate, type TaskSummary } from '../../api/banker';
+import { createTemplate, getTaskFile, listTasks, publishTemplate, updateTemplate, type TaskSummary } from '../../api/banker';
 import { getErrorMessage } from '../../api/errors';
+import { getUser } from '../../auth/store';
 import { Button } from '../../ui/Button';
 import { Notice } from '../../ui/Notice';
+import { COLUMN_LABELS, labelOf } from '../../lib/columns';
 
 /**
- * 标注画布：底版就是**原始 PDF 本身**（pdf.js 渲染原页），上面叠系统认出来的列带与单元格。
+ * 标注：三步，不让人学新词。
  *
- * 三个来源：内置样本 / 本地上传 / 已有任务的原件。
- * 模板只声明「我需要哪些列」，位置由版面分析现找；人可以改字段名、拖列带、按关键词补列。
+ * ① 打开一份流水（原件直接铺在画布上）
+ * ② 确认系统认出来的列（每列下面直接显示它读到的值，认错就改中文名，偏了就拖）
+ * ③ 保存并启用（以后这家银行的同类流水直接用它）
+ *
+ * 不做的事：不让人填英文代号、不让人理解「列带/归一化/版本/草稿」这些内部词。
  */
-const FIELDS = [
-  'txn_date', 'trade_time', 'reference_no', 'summary', 'counterparty_name',
-  'direction', 'amount', 'amount_in', 'amount_out', 'balance', 'account_no',
-];
-
 type Draft = { field: string; x0: number; x1: number; cells: InspectBand['cells']; source: string };
 type Drag = { index: number; mode: 'move' | 'left' | 'right'; startX: number; x0: number; x1: number };
-type Source =
-  | { kind: 'sample'; label: string; sample: string }
-  | { kind: 'file'; label: string; blob: Blob };
+type Source = { kind: 'sample'; label: string; sample: string } | { kind: 'file'; label: string; blob: Blob };
+
+const BANKS = [
+  { code: 'ICBC', label: '工商银行' }, { code: 'CCB', label: '建设银行' }, { code: 'ABC', label: '农业银行' },
+  { code: 'BOC', label: '中国银行' }, { code: 'CMB', label: '招商银行' }, { code: 'PSBC', label: '邮储银行' },
+  { code: 'COMM', label: '交通银行' }, { code: 'SPDB', label: '浦发银行' }, { code: 'CIB', label: '兴业银行' },
+  { code: 'CITIC', label: '中信银行' }, { code: 'CEB', label: '光大银行' }, { code: 'GDB', label: '广发银行' },
+  { code: 'PAB', label: '平安银行' }, { code: 'OTHER', label: '其他 / 不确定' },
+];
 
 export default function AnnotatePage() {
   const navigate = useNavigate();
+  const isAdmin = Boolean(getUser()?.is_admin);
+
   const [samples, setSamples] = useState<LabSample[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [source, setSource] = useState<Source | null>(null);
   const [pages, setPages] = useState<InspectPage[]>([]);
   const [pageIndex, setPageIndex] = useState(0);
   const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const [bankCode, setBankCode] = useState('');
   const [keyword, setKeyword] = useState('卡号');
-  const [bankCode, setBankCode] = useState('UNKNOWN');
+  const [password, setPassword] = useState('');
+  const [needPassword, setNeedPassword] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const [password, setPassword] = useState('');
-  const [needPassword, setNeedPassword] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<Drag | null>(null);
   const renderTaskRef = useRef<{ cancel(): void } | null>(null);
   const [fitScale, setFitScale] = useState(1);
-  // 默认放大一点：800×1000 pt 的流水页按宽度铺满后正文字号只有 7px 左右，看不清等于没底版
   const [zoom, setZoom] = useState(1.35);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
 
   useEffect(() => {
     listSamples()
-      .then((data) => {
-        setSamples(data.items);
-        if (data.items.length) setSource({ kind: 'sample', label: data.items[0].name, sample: data.items[0].name });
-      })
-      .catch((err) => setError(getErrorMessage(err, 'banker')));
+      .then((data) => setSamples(data.items))
+      .catch(() => setSamples([]));
     listTasks({ limit: 20 })
       .then((data) => setTasks(data.items))
       .catch(() => setTasks([]));
   }, []);
 
-  // 底版 URL：样本走 Lab 静态接口，上传/任务走 blob URL（用完必须 revoke）
   useEffect(() => {
-    if (!source) {
-      setPdfUrl(null);
-      return;
-    }
+    if (!source) return;
     if (source.kind === 'sample') {
       setPdfUrl(sampleFileUrl(source.sample));
       return;
@@ -86,7 +86,7 @@ export default function AnnotatePage() {
     return () => URL.revokeObjectURL(url);
   }, [source]);
 
-  const loadLayout = useCallback(async (current: Source, secret?: string) => {
+  const analyse = useCallback(async (current: Source, secret?: string) => {
     setBusy(true);
     setError('');
     setMessage('');
@@ -98,15 +98,15 @@ export default function AnnotatePage() {
       setPages(report.pages);
       setPageIndex(0);
       setDrafts(toDrafts(report.pages[0]));
-      setSelected(null);
+      setOpenIndex(null);
+      const bands = report.pages[0]?.bands.length ?? 0;
       setMessage(
-        '已分析：' + report.page_count + ' 页，第 1 页认出 ' + (report.pages[0]?.bands.length ?? 0) + ' 条列带' +
-          (report.text_layer ? '' : '（这份文件没有文字层，需要走 OCR）'),
+        report.text_layer
+          ? '系统认出 ' + bands + ' 列。下面每一列都显示它读到的前几个值，认错就改名字，偏了就拖左边那条线。'
+          : '这份文件是扫描件（没有文字层），认不出列。请换一份电子版 PDF，或先在别处做 OCR。',
       );
     } catch (err) {
-      // 加密件：不报「分析失败」，直接要口令（pymupdf 原文 No password given 用户看不懂）
-      const code = (err as { code?: string }).code;
-      if (code === 'E_ENCRYPT') setNeedPassword(true);
+      if ((err as { code?: string }).code === 'E_ENCRYPT') setNeedPassword(true);
       setError(getErrorMessage(err, 'banker'));
     } finally {
       setBusy(false);
@@ -114,18 +114,17 @@ export default function AnnotatePage() {
   }, [password]);
 
   useEffect(() => {
-    if (source) {
-      setNeedPassword(false);
-      setPassword('');
-      void loadLayout(source, '');
-    }
+    if (!source) return;
+    setNeedPassword(false);
+    setPassword('');
+    setBankCode('');
+    void analyse(source, '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
 
   const page = pages[pageIndex];
   const scale = fitScale * zoom;
 
-  // 渲染原始 PDF 页
   useEffect(() => {
     if (!page || !pdfUrl) return;
     let cancelled = false;
@@ -152,13 +151,12 @@ export default function AnnotatePage() {
     })().catch((err: unknown) => {
       const text = err instanceof Error ? err.message : String(err);
       if (text.includes('cancel')) return;
-      // pdf.js 对加密件的原文就是 No password given，翻成人话并弹出口令框
-      if (text.includes('password') || text.includes('Password')) {
+      if (/password/i.test(text)) {
         setNeedPassword(true);
-        setError('这份 PDF 设有打开口令，请输入口令。');
+        setError('这份 PDF 有打开口令，请先填写口令。');
         return;
       }
-      setError('PDF 渲染失败：' + text);
+      setError('原件打不开：' + text);
     });
     return () => {
       cancelled = true;
@@ -176,7 +174,7 @@ export default function AnnotatePage() {
     event.stopPropagation();
     const draft = drafts[index];
     dragRef.current = { index, mode, startX: toPage(event.clientX), x0: draft.x0, x1: draft.x1 };
-    setSelected(index);
+    setOpenIndex(index);
     (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
   }
 
@@ -194,34 +192,33 @@ export default function AnnotatePage() {
     );
   }
 
-  function onPointerUp() {
-    dragRef.current = null;
-  }
-
-  async function addByKeyword() {
+  async function addMissingColumn() {
     if (!source || !keyword.trim()) return;
     setBusy(true);
     setError('');
-    setMessage('');
     try {
       const report =
         source.kind === 'sample'
           ? await spreadKeyword(source.sample, keyword.trim())
-          : await spreadFile(source.blob, keyword.trim());
+          : await spreadFile(source.blob, keyword.trim(), password || undefined);
       const bands = report.bands.filter((band) => band.page === pageIndex);
       if (!bands.length) {
-        setMessage('这一页没找到「' + keyword + '」。扫描件（无文字层）要先走 OCR。');
+        setMessage('这一页没找到「' + keyword + '」。换个词试试，比如表头上印的那两个字。');
         return;
       }
-      const added = bands.map((band) => ({
-        field: guessField(keyword),
-        x0: band.x0,
-        x1: band.x1,
-        cells: band.cells,
-        source: 'keyword:' + keyword,
-      }));
-      setDrafts((prev) => dedupe([...prev, ...added]));
-      setMessage('按「' + keyword + '」扩散到 ' + added.length + ' 条列带。');
+      setDrafts((prev) =>
+        dedupe([
+          ...prev,
+          ...bands.map((band) => ({
+            field: guessField(keyword),
+            x0: band.x0,
+            x1: band.x1,
+            cells: band.cells,
+            source: '按「' + keyword + '」找到',
+          })),
+        ]),
+      );
+      setMessage('按「' + keyword + '」补上了 ' + bands.length + ' 列。');
     } catch (err) {
       setError(getErrorMessage(err, 'banker'));
     } finally {
@@ -229,22 +226,28 @@ export default function AnnotatePage() {
     }
   }
 
-  async function save() {
+  async function saveAndUse() {
     if (!page) return;
+    if (!drafts.length) {
+      setError('还没有认出的列，先按关键词补一列。');
+      return;
+    }
+    if (!bankCode || bankCode === 'OTHER') {
+      setError('先选这是哪家银行——以后同类流水才能自动对上。');
+      return;
+    }
     setBusy(true);
     setError('');
     setMessage('');
     try {
       const { width, height } = page;
       const headerY = page.header_y ?? height * 0.12;
-      const columns = drafts
-        .filter((draft) => draft.field)
-        .map((draft) => ({
-          field: draft.field,
-          fields: [draft.field],
-          x: Number((draft.x0 / width).toFixed(4)),
-          w: Number(((draft.x1 - draft.x0) / width).toFixed(4)),
-        }));
+      const columns = drafts.map((draft) => ({
+        field: draft.field,
+        fields: [draft.field],
+        x: Number((draft.x0 / width).toFixed(4)),
+        w: Number(((draft.x1 - draft.x0) / width).toFixed(4)),
+      }));
       const fieldMap: Record<string, unknown> = {};
       columns.forEach((column, index) => {
         fieldMap[column.field] = index;
@@ -252,19 +255,23 @@ export default function AnnotatePage() {
       const layout = {
         page_size: { w: width, h: height },
         page_count: pages.length,
-        tables: [
-          {
-            page: pageIndex,
-            slot: 'first',
-            area: { x: 0.02, y: Number((headerY / height).toFixed(4)), w: 0.96, h: Number((0.98 - headerY / height).toFixed(4)) },
-            headerY: Number((headerY / height).toFixed(4)),
-            columns,
-          },
-        ],
+        tables: [{
+          page: pageIndex,
+          slot: 'first',
+          area: { x: 0.02, y: Number((headerY / height).toFixed(4)), w: 0.96, h: Number((0.98 - headerY / height).toFixed(4)) },
+          headerY: Number((headerY / height).toFixed(4)),
+          columns,
+        }],
       };
       const created = await createTemplate({ bank_code: bankCode, field_map: fieldMap });
       await updateTemplate(created.id, { field_map: fieldMap, layout });
-      setMessage('已保存为模板 #' + created.id + '（草稿）。');
+      // 使用者要的是「保存完就能用」，不该再去另一个页面点启用
+      if (isAdmin) {
+        await publishTemplate(created.id);
+        setMessage('已保存并启用。以后' + bankLabel(bankCode) + '的同类流水会自动用这份模板解析。');
+      } else {
+        setMessage('已保存为草稿。启用需要管理员操作，或者让管理员点一下「启用」。');
+      }
       navigate('/bank/templates/' + created.id);
     } catch (err) {
       setError(getErrorMessage(err, 'banker'));
@@ -280,71 +287,76 @@ export default function AnnotatePage() {
     <div className="panel wide">
       <header className="panel-head">
         <div>
-          <h1>标注画布</h1>
+          <h1>教系统认这份流水</h1>
           <p className="sub">
-            底版是原始 PDF。模板只声明需要哪些列，位置由「关键词定位 + 版面往下扩散」现找；认错就改、偏了就拖、漏了就用关键词补。
+            打开一份流水 → 系统把认出来的列摆在原件上 → 确认没问题就保存。以后这家的同类流水就直接用它。
           </p>
         </div>
         <div className="filters">
           <select value={bankCode} onChange={(event) => setBankCode(event.target.value)}>
-            {['UNKNOWN', 'ICBC', 'CCB', 'CMB', 'ABC', 'BOC'].map((code) => (
-              <option key={code} value={code}>{code}</option>
+            <option value="">这是哪家银行？</option>
+            {BANKS.map((bank) => (
+              <option key={bank.code} value={bank.code}>{bank.label}</option>
             ))}
           </select>
-          <Button onClick={() => void save()} disabled={busy || !drafts.length}>保存为模板</Button>
+          <Button onClick={() => void saveAndUse()} disabled={busy || !drafts.length}>
+            保存并启用
+          </Button>
         </div>
       </header>
 
-      <div className="source-bar">
-        <label className="source-item">
-          <span>打开原件</span>
-          <input
-            type="file"
-            accept=".pdf"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) setSource({ kind: 'file', label: file.name, blob: file });
-            }}
-          />
-        </label>
-
-        <label className="source-item">
-          <span>按任务原件</span>
-          <select
-            value={source?.kind === 'sample' ? '' : ''}
-            onChange={(event) => {
-              const id = Number(event.target.value);
-              if (!id) return;
-              setBusy(true);
-              getTaskFile(id)
-                .then((blob) => setSource({ kind: 'file', label: '任务 #' + id, blob }))
-                .catch((err) => setError(getErrorMessage(err, 'banker')))
-                .finally(() => setBusy(false));
-            }}
-          >
-            <option value="">选一个已受理任务…</option>
-            {tasks.map((task) => (
-              <option key={task.id} value={task.id}>#{task.id} {task.biz_no}</option>
-            ))}
-          </select>
-        </label>
-
-        <label className="source-item">
-          <span>或内置样本</span>
-          <select
-            value={source?.kind === 'sample' ? source.sample : ''}
-            onChange={(event) => {
-              const name = event.target.value;
-              if (name) setSource({ kind: 'sample', label: name, sample: name });
-            }}
-          >
-            <option value="">不使用样本</option>
-            {samples.map((item) => (
-              <option key={item.name} value={item.name}>{item.name}</option>
-            ))}
-          </select>
-        </label>
-      </div>
+      {!source ? (
+        <div className="start-box">
+          <h2>第一步：打开一份流水</h2>
+          <p className="muted">用 PDF 原件就行，有密码也能填。</p>
+          <label className="big-file">
+            选择 PDF 文件
+            <input
+              type="file"
+              accept=".pdf"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) setSource({ kind: 'file', label: file.name, blob: file });
+              }}
+            />
+          </label>
+          <div className="start-alt">
+            <label>
+              或者用已受理的任务原件
+              <select
+                onChange={(event) => {
+                  const id = Number(event.target.value);
+                  if (!id) return;
+                  setBusy(true);
+                  getTaskFile(id)
+                    .then((blob) => setSource({ kind: 'file', label: '任务 #' + id, blob }))
+                    .catch((err) => setError(getErrorMessage(err, 'banker')))
+                    .finally(() => setBusy(false));
+                }}
+              >
+                <option value="">选一个任务…</option>
+                {tasks.map((task) => (
+                  <option key={task.id} value={task.id}>#{task.id} {task.biz_no}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              或者看内置样例
+              <select
+                onChange={(event) => {
+                  const name = event.target.value;
+                  if (name) setSource({ kind: 'sample', label: name, sample: name });
+                }}
+              >
+                <option value="">选一个样例…</option>
+                {samples.map((item) => (
+                  <option key={item.name} value={item.name}>{item.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+      ) : null}
 
       {needPassword ? (
         <div className="lab-save password-bar">
@@ -354,10 +366,10 @@ export default function AnnotatePage() {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && source) void loadLayout(source, password);
+              if (event.key === 'Enter') void analyse(source as Source, password);
             }}
           />
-          <Button disabled={busy || !password.trim()} onClick={() => source && void loadLayout(source, password)}>
+          <Button disabled={busy || !password.trim()} onClick={() => source && void analyse(source, password)}>
             用这个口令打开
           </Button>
         </div>
@@ -366,152 +378,160 @@ export default function AnnotatePage() {
       {error ? <Notice>{error}</Notice> : null}
       {message ? <Notice tone="ok">{message}</Notice> : null}
 
-      <div className="annotate">
-        <div className="annotate-stage" ref={stageRef} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-          <div className="stage-bar">
-            <span className="muted small">
-              {source ? '原件：' + source.label : '还没有打开原件'}
-              {page ? ' · 第 ' + (pageIndex + 1) + '/' + pages.length + ' 页 · ' + Math.round(page.width) + '×' + Math.round(page.height) + ' pt · ' + Math.round(scale * 100) + '%' : ''}
-            </span>
-            <span className="stage-tools">
-              {pages.length > 1
-                ? pages.map((item, index) => (
-                    <button
-                      key={item.index}
-                      className={index === pageIndex ? 'active' : ''}
-                      onClick={() => {
-                        setPageIndex(index);
-                        setDrafts(toDrafts(item));
-                        setSelected(null);
-                      }}
-                    >
-                      第 {index + 1} 页
-                    </button>
-                  ))
-                : null}
-              <button onClick={() => setZoom(Math.max(0.4, zoom - 0.25))}>−</button>
-              <button onClick={() => setZoom(Math.min(3, zoom + 0.25))}>+</button>
-              <button onClick={() => setZoom(1)}>适应宽度</button>
-            </span>
+      {source ? (
+        <>
+          <div className="step-row">
+            <span className="step-done">① 已打开：{source.label}</span>
+            <button className="link-btn" onClick={() => { setSource(null); setDrafts([]); setPages([]); setMessage(''); }}>
+              换一个文件
+            </button>
           </div>
 
-          <div className="canvas-wrap" style={{ width: canvasWidth || '100%', height: canvasHeight || 420 }}>
-            <canvas ref={canvasRef} />
-            {page
-              ? drafts.map((draft, index) => (
-                  <div
-                    key={index}
-                    className={'band' + (selected === index ? ' selected' : '')}
-                    style={{
-                      left: draft.x0 * scale,
-                      width: Math.max(6, (draft.x1 - draft.x0) * scale),
-                      top: (page.header_y ?? 0) * scale,
-                      // 列带只画到最后一个被捡到的单元格，画到页底会像是「这一列一直空着」
-                      height: Math.max(
-                        12,
-                        (draft.cells.length
-                          ? Math.max(...draft.cells.map((cell) => cell.y1)) - (page.header_y ?? 0)
-                          : page.height - (page.header_y ?? 0)) * scale,
-                      ),
-                    }}
-                    onPointerDown={(event) => onPointerDown(event, index, 'move')}
-                    title={draft.field + ' · ' + draft.cells.length + ' 格'}
-                  >
-                    <span className="band-label">{draft.field}</span>
-                    <span className="handle left" onPointerDown={(event) => onPointerDown(event, index, 'left')} />
-                    <span className="handle right" onPointerDown={(event) => onPointerDown(event, index, 'right')} />
-                    {draft.cells.slice(0, 600).map((cell, cellIndex) => (
-                      <span
-                        key={cellIndex}
-                        className="cell"
-                        style={{
-                          left: (cell.x0 - draft.x0) * scale,
-                          top: (cell.y0 - (page.header_y ?? 0)) * scale,
-                          width: Math.max(2, (cell.x1 - cell.x0) * scale),
-                          height: Math.max(2, (cell.y1 - cell.y0) * scale),
-                        }}
-                      />
-                    ))}
-                  </div>
-                ))
-              : null}
-          </div>
-        </div>
-
-        <aside className="annotate-side">
-          <div className="lab-save annotate-add">
-            <input placeholder="关键词，如 卡号" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
-            <Button onClick={() => void addByKeyword()} disabled={busy}>按关键词加列</Button>
-          </div>
-
-          <div className="band-list">
-            {drafts.length === 0 ? <p className="muted small">还没有列带。用上面的关键词加一条。</p> : null}
-            {drafts.map((draft, index) => {
-              const open = selected === index;
-              return (
-                <div key={index} className={'band-item' + (open ? ' open' : '')}>
-                  <button className="band-head" onClick={() => setSelected(open ? null : index)} aria-expanded={open}>
-                    <span className="band-caret">{open ? '▾' : '▸'}</span>
-                    <span className="band-name">{draft.field}</span>
-                    <span className="band-meta">{Math.round(draft.x0)}–{Math.round(draft.x1)} · {draft.cells.length} 格</span>
-                  </button>
-                  {open ? (
-                    <div className="band-body">
-                      <label>
-                        字段
-                        <select
-                          value={draft.field}
-                          onChange={(event) =>
-                            setDrafts((prev) => prev.map((item, i) => (i === index ? { ...item, field: event.target.value } : item)))
-                          }
+          <div className="annotate">
+            <div className="annotate-stage" ref={stageRef} onPointerMove={onPointerMove} onPointerUp={() => (dragRef.current = null)}>
+              <div className="stage-bar">
+                <span className="muted small">
+                  第 {pageIndex + 1}/{pages.length || 1} 页
+                  {page ? ' · ' + Math.round(page.width) + '×' + Math.round(page.height) + ' pt · ' + Math.round(scale * 100) + '%' : ''}
+                </span>
+                <span className="stage-tools">
+                  {pages.length > 1
+                    ? pages.map((item, index) => (
+                        <button
+                          key={item.index}
+                          className={index === pageIndex ? 'active' : ''}
+                          onClick={() => {
+                            setPageIndex(index);
+                            setDrafts(toDrafts(item));
+                            setOpenIndex(null);
+                          }}
                         >
-                          {(FIELDS.includes(draft.field) ? FIELDS : [draft.field, ...FIELDS]).map((field) => (
-                            <option key={field} value={field}>{field}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        x0 / x1（pt）
-                        <span className="inline-pair">
-                          <input
-                            type="number"
-                            value={Math.round(draft.x0)}
-                            onChange={(event) =>
-                              setDrafts((prev) => prev.map((item, i) => (i === index ? { ...item, x0: Number(event.target.value) } : item)))
-                            }
-                          />
-                          <input
-                            type="number"
-                            value={Math.round(draft.x1)}
-                            onChange={(event) =>
-                              setDrafts((prev) => prev.map((item, i) => (i === index ? { ...item, x1: Number(event.target.value) } : item)))
-                            }
-                          />
-                        </span>
-                      </label>
-                      <p className="muted small">来源 {draft.source} · {draft.cells.length} 个单元格</p>
-                      <button
-                        className="link-btn danger"
-                        onClick={() => {
-                          setDrafts((prev) => prev.filter((_, i) => i !== index));
-                          setSelected(null);
-                        }}
-                      >
-                        删掉这一列
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
+                          第 {index + 1} 页
+                        </button>
+                      ))
+                    : null}
+                  <button onClick={() => setZoom(Math.max(0.4, zoom - 0.25))}>缩小</button>
+                  <button onClick={() => setZoom(Math.min(3, zoom + 0.25))}>放大</button>
+                  <button onClick={() => setZoom(1)}>整页</button>
+                </span>
+              </div>
 
-          <p className="muted small">
-            没有文字层的扫描件扩不出列带——那不是画布的问题，要走 OCR。保存的是列带（相对宽度），
-            同一家银行换一份文件、位置略有偏移也能用。
-          </p>
-        </aside>
-      </div>
+              <div className="canvas-wrap" style={{ width: canvasWidth || '100%', height: canvasHeight || 420 }}>
+                <canvas ref={canvasRef} />
+                {page
+                  ? drafts.map((draft, index) => (
+                      <div
+                        key={index}
+                        className={'band' + (openIndex === index ? ' selected' : '')}
+                        style={{
+                          left: draft.x0 * scale,
+                          width: Math.max(6, (draft.x1 - draft.x0) * scale),
+                          top: (page.header_y ?? 0) * scale,
+                          height: Math.max(
+                            12,
+                            (draft.cells.length
+                              ? Math.max(...draft.cells.map((cell) => cell.y1)) - (page.header_y ?? 0)
+                              : page.height - (page.header_y ?? 0)) * scale,
+                          ),
+                        }}
+                        onPointerDown={(event) => onPointerDown(event, index, 'move')}
+                        title={labelOf(draft.field) + ' · 读到 ' + draft.cells.length + ' 个值'}
+                      >
+                        <span className="band-label">{labelOf(draft.field)}</span>
+                        <span className="handle left" onPointerDown={(event) => onPointerDown(event, index, 'left')} />
+                        <span className="handle right" onPointerDown={(event) => onPointerDown(event, index, 'right')} />
+                        {draft.cells.slice(0, 600).map((cell, cellIndex) => (
+                          <span
+                            key={cellIndex}
+                            className="cell"
+                            style={{
+                              left: (cell.x0 - draft.x0) * scale,
+                              top: (cell.y0 - (page.header_y ?? 0)) * scale,
+                              width: Math.max(2, (cell.x1 - cell.x0) * scale),
+                              height: Math.max(2, (cell.y1 - cell.y0) * scale),
+                            }}
+                          />
+                        ))}
+                      </div>
+                    ))
+                  : null}
+              </div>
+            </div>
+
+            <aside className="annotate-side">
+              <div className="step-head">
+                <strong>② 系统认出的列（{drafts.length}）</strong>
+                <span className="muted small">每列下面写着它读到的值</span>
+              </div>
+
+              <div className="band-list">
+                {drafts.map((draft, index) => {
+                  const open = openIndex === index;
+                  return (
+                    <div key={index} className={'band-item' + (open ? ' open' : '')}>
+                      <button className="band-head" onClick={() => setOpenIndex(open ? null : index)} aria-expanded={open}>
+                        <span className="band-caret">{open ? '▾' : '▸'}</span>
+                        <span className="band-name">{labelOf(draft.field)}</span>
+                        <span className="band-meta">读到 {draft.cells.length} 个值</span>
+                      </button>
+                      <p className="band-preview">
+                        {draft.cells.slice(0, 3).map((cell) => cell.text).join(' · ') || '（这一列没读到值）'}
+                      </p>
+                      {open ? (
+                        <div className="band-body">
+                          <label>
+                            这一列是什么？
+                            <select
+                              value={draft.field}
+                              onChange={(event) =>
+                                setDrafts((prev) => prev.map((item, i) => (i === index ? { ...item, field: event.target.value } : item)))
+                              }
+                            >
+                              {COLUMN_LABELS.map((item) => (
+                                <option key={item.key} value={item.key}>
+                                  {item.label}{item.hint ? '（' + item.hint + '）' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <p className="muted small">
+                            位置不对就在左边原件上拖这一列，或拖它左右两边的竖线调整宽窄。
+                          </p>
+                          <button
+                            className="link-btn danger"
+                            onClick={() => {
+                              setDrafts((prev) => prev.filter((_, i) => i !== index));
+                              setOpenIndex(null);
+                            }}
+                          >
+                            这一列不要
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="lab-save annotate-add">
+                <input placeholder="少了一列？输入表头上的字，如 卡号" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
+                <Button onClick={() => void addMissingColumn()} disabled={busy}>补一列</Button>
+              </div>
+
+              <div className="step-head">
+                <strong>③ 没问题就保存</strong>
+              </div>
+              <p className="muted small">
+                保存后这份模板会自动启用。以后同一家银行的同类流水上传后就不用再教了。
+                {isAdmin ? '' : '（你没有启用权限，会先存成草稿。）'}
+              </p>
+              <Button onClick={() => void saveAndUse()} disabled={busy || !drafts.length}>
+                保存并启用
+              </Button>
+            </aside>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -543,6 +563,10 @@ function dedupe(drafts: Draft[]): Draft[] {
     out.push({ ...draft });
   }
   return out;
+}
+
+function bankLabel(code: string) {
+  return BANKS.find((bank) => bank.code === code)?.label ?? code;
 }
 
 function guessField(keyword: string): string {

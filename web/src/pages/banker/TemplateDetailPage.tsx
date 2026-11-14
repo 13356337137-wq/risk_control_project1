@@ -46,7 +46,8 @@ export default function TemplateDetailPage() {
       .then(([detail, statistics]) => {
         setTemplate(detail);
         setStats(statistics);
-        setRequired(detail.required_fields ?? Object.keys(detail.field_map ?? {}));
+        // 默认只要最必要的三列：全选会让「某一列本来就没值」也报缺列
+        setRequired(detail.required_fields ?? ['txn_date', 'amount', 'balance']);
       })
       .catch((err) => setError(getErrorMessage(err, 'banker')));
   };
@@ -121,7 +122,7 @@ export default function TemplateDetailPage() {
 
       {/* 试跑：模板保存完就能验，不必去借款侧走一遍真任务 */}
       <section>
-        <h2>试跑（不落库）</h2>
+        <h2>试跑（可选，不落库）</h2>
         <p className="muted small">
           拿一份该银行的文件试一遍：能出几笔、每页各几笔、缺了哪些必需列。这一步不通，就别启用。
         </p>
@@ -199,7 +200,7 @@ export default function TemplateDetailPage() {
 
       {/* 必需列 */}
       <section>
-        <h2>必需列（{required.length}）</h2>
+        <h2>必需列（可选，{required.length}）</h2>
         <p className="muted small">
           勾上「这份版式一定有的列」。解析时若没读到，报告会直接写「模板缺列：xxx」，而不是让指标悄悄变成不可算。
         </p>
@@ -234,7 +235,7 @@ export default function TemplateDetailPage() {
           <tbody>
             {Object.entries(template.field_map ?? {}).map(([field, target]) => (
               <tr key={field}>
-                <td>{FIELD_LABEL[field] ?? field} <span className="muted small">{field}</span></td>
+                <td title={field}>{FIELD_LABEL[field] ?? field}</td>
                 <td className="small muted">{String(target)}</td>
                 <td className="small muted">{required.includes(field) ? '是' : ''}</td>
               </tr>
