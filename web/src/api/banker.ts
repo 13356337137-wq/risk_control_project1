@@ -50,10 +50,33 @@ export type ReportPayload = {
   metric_set_version?: number;
   threshold_version?: number;
   conclusions?: { code: string; message: string; level: string }[];
+  evidence?: unknown[];
+  materials?: { role: string; pages: number; sha256?: string | null; file_id?: number }[];
+  self_check?: Record<string, unknown> | null;
+  verification?: unknown;
+  trend?: unknown;
+  custom_field_stats?: unknown;
+  version?: number;
 };
 
 export function getReport(taskId: number): Promise<ReportPayload> {
   return request<ReportPayload>('/reports/' + taskId);
+}
+
+export type TxnRow = {
+  id: number;
+  txn_date: string | null;
+  direction: string | null;
+  amount: string | null;
+  balance: string | null;
+  summary: string | null;
+  counterparty_name?: string | null;
+  page_no?: number | null;
+  confidence?: string | null;
+};
+
+export function getTransactions(taskId: number): Promise<TxnRow[]> {
+  return request<TxnRow[]>('/tasks/' + taskId + '/transactions?limit=2000');
 }
 
 export type AuditRow = {

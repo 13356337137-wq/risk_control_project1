@@ -321,3 +321,36 @@ ul.plain { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--muted)
 }
 .annotate-list tr { cursor: pointer; }
 .annotate-list tr.active-row { background: #eef4ff; }
+
+/* 页签一律单行：换行会把「回收站」挤到下一排，看起来像另一个控件 */
+/* 基础 .tabs 是「两选一」的网格（登录页那种）。多页签一律用 .small-tabs：
+   它必须是单行 + 自适应宽度，否则第三个页签会被挤到下一排。 */
+.small-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  grid-template-columns: none;
+  gap: 4px;
+  width: fit-content;
+  margin-bottom: 0;
+}
+.small-tabs button { white-space: nowrap; flex: 0 0 auto; padding: 6px 14px; font-size: 13px; }
+.panel-head .filters { flex-wrap: nowrap; }
+.report-tabs { margin: 6px 0 14px; }
+.verify-block { border-left: 3px solid var(--line); padding: 2px 0 2px 12px; margin-bottom: 12px; }
+.verify-block h3 { font-size: 14px; margin: 0 0 4px; }
+.json-box {
+  background: #fbfdff; border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+  font-size: 12px; max-height: 320px; overflow: auto;
+}
+/* ---- 特征 Lab 用法指引 ---- */
+.lab-guide { display: grid; gap: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: #fbfdff; margin-top: 12px; }
+.lab-guide-block { display: grid; gap: 6px; }
+.lab-guide-title { font-size: 12.5px; color: var(--muted); letter-spacing: .02em; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 3px 10px;
+  font-size: 12.5px; font-family: ui-monospace, Consolas, monospace; cursor: pointer; color: var(--brand);
+}
+.chip:hover { background: #eef4ff; border-color: var(--brand); }
+.lab-item.active { background: #eef4ff; border-color: var(--brand); }
+.lab-guide code { background: #f1f5f9; padding: 1px 5px; border-radius: 5px; font-size: 12px; }

@@ -49,7 +49,6 @@ export default function AnnotatePage() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<Drag | null>(null);
   const renderTaskRef = useRef<{ cancel(): void } | null>(null);
-  const workerRef = useRef<Worker | null>(null);
   const [scale, setScale] = useState(1);
 
   useEffect(() => {
@@ -91,14 +90,10 @@ export default function AnnotatePage() {
     (async () => {
       // pdf.js 有 300+KB，动态导入让银行侧主包不带它，只在打开画布时才拉
       const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
-      // Vite 下 pdf.js 的 worker 用 workerPort 最稳：?url 导入在 dev/prod 行为不一致
-      if (!workerRef.current) {
-        workerRef.current = new Worker(
-          new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url),
-          { type: 'module' },
-        );
-      }
-      pdfjs.GlobalWorkerOptions.workerPort = workerRef.current;
+      // worker 放在 public/ 下走同源静态路径：
+      // Vite 的 new Worker(new URL(...)) 在 dev 下会挂在 ?worker_file 上不返回（status 0），
+      // pdf.js 就一直等着，画布永远是白的。
+      pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
       const doc = await pdfjs.getDocument({ url: sampleFileUrl(sample) }).promise;
       const pdfPage = await doc.getPage(pageIndex + 1);
       const base = pdfPage.getViewport({ scale: 1 });

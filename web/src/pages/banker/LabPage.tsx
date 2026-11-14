@@ -26,6 +26,27 @@ const FAMILY_LABEL: Record<string, string> = {
   filter: '过滤',
 };
 
+const COLUMNS = [
+  { name: 'amount', note: '金额（Decimal，带正负）' },
+  { name: 'direction', note: "'in' 入账 / 'out' 出账" },
+  { name: 'balance', note: '余额' },
+  { name: 'summary', note: '摘要（文本）' },
+  { name: 'counterparty_name', note: '对方户名' },
+  { name: 'txn_date', note: '交易日期 YYYY-MM-DD' },
+  { name: 'trade_time', note: '交易时分 HH:MM:SS' },
+  { name: 'reference_no', note: '流水号' },
+  { name: 'hour', note: '小时（0–23，来自 trade_time）' },
+  { name: 'month', note: '月份（1–12）' },
+  { name: 'dow', note: '星期（0 = 周一）' },
+];
+
+const NOTES = [
+  "聚合要带 where：count(where=direction=='out')，不写 where 就是全部行。",
+  "文本要用引号：in_lexicon(name='salary')、contains(word='工资')。",
+  "产出是一列数的算子（zscore / pct_rank / in_hours / contains）要跟比较或聚合搭配：count(where=zscore() > 3)。",
+  "缺列不报 0，返回空值 + 原因；报告里会写成「不可算」，不会悄悄算成 0。",
+];
+
 const EXAMPLES = [
   { label: '出账总额', expr: "sum(amount, where=direction=='out')" },
   { label: '月均出账', expr: 'sum(amount) / coverage_months()' },
@@ -61,6 +82,7 @@ export default function LabPage() {
   const [saveName, setSaveName] = useState('');
   const [saveUnit, setSaveUnit] = useState('');
   const [saveNote, setSaveNote] = useState('');
+  const [activeOp, setActiveOp] = useState<LabOperator | null>(null);
 
   const reloadCustom = () => {
     listCustom()
@@ -201,11 +223,14 @@ export default function LabPage() {
                     {items.map((item) => (
                       <button
                         key={item.key}
-                        className="lab-item"
-                        onClick={() => setExpr((prev) => insertOperator(prev, item.key))}
+                        className={'lab-item' + (activeOp?.key === item.key ? ' active' : '')}
+                        onClick={() => {
+                          setActiveOp(item);
+                          setExpr((prev) => insertOperator(prev, item.key));
+                        }}
                         title={item.detail}
                       >
-                        <span className="lab-code">{item.key}</span>
+                        <span className="lab-code">{signature(item)}</span>
                         <span className="lab-name">{item.detail}</span>
                       </button>
                     ))}
@@ -233,6 +258,63 @@ export default function LabPage() {
             onChange={(event) => setExpr(event.target.value)}
             rows={4}
           />
+
+          <div className="lab-guide">
+            <div className="lab-guide-block">
+              <span className="lab-guide-title">可用字段（点一下插入）</span>
+              <div className="chips">
+                {COLUMNS.map((column) => (
+                  <button
+                    key={column.name}
+                    className="chip"
+                    title={column.note}
+                    onClick={() => setExpr((prev) => (prev.trim() ? prev + ' ' + column.name : column.name))}
+                  >
+                    {column.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {activeOp ? (
+              <div className="lab-guide-block">
+                <span className="lab-guide-title">
+                  {activeOp.key} · {FAMILY_LABEL[activeOp.family] ?? activeOp.family} · {activeOp.kind}
+                </span>
+                <p className="small muted">{activeOp.detail}</p>
+                {activeOp.params.length ? (
+                  <table className="grid compact">
+                    <thead><tr><th>参数</th><th>类型</th><th>默认</th><th>说明</th></tr></thead>
+                    <tbody>
+                      {activeOp.params.map((param) => (
+                        <tr key={param.name}>
+                          <td><code>{param.name}</code></td>
+                          <td className="small muted">{param.type}</td>
+                          <td className="small muted">{param.default === null || param.default === undefined ? '—' : String(param.default)}</td>
+                          <td className="small muted">{param.detail || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="muted small">这个算子没有参数，直接调用即可。</p>
+                )}
+                <p className="muted small">函数签名：<code>{signature(activeOp)}</code></p>
+              </div>
+            ) : (
+              <div className="lab-guide-block">
+                <span className="lab-guide-title">用法</span>
+                <p className="muted small">点左边任意算子，这里会列出它的参数与签名。</p>
+              </div>
+            )}
+
+            <div className="lab-guide-block">
+              <span className="lab-guide-title">写法提示</span>
+              <ul className="plain">
+                {NOTES.map((note, index) => <li key={index}>{note}</li>)}
+              </ul>
+            </div>
+          </div>
 
           <div className="lab-examples">
             {EXAMPLES.map((item) => (
@@ -292,6 +374,18 @@ export default function LabPage() {
       </div>
     </div>
   );
+}
+
+function signature(op: LabOperator): string {
+  if (!op.params.length) return op.key + '()';
+  const inner = op.params
+    .map((param) => {
+      if (param.type === 'str') return param.name + "='…'";
+      if (param.default === null || param.default === undefined) return param.name;
+      return param.name + '=' + String(param.default);
+    })
+    .join(', ');
+  return op.key + '(' + inner + ')';
 }
 
 function insertOperator(prev: string, key: string) {
