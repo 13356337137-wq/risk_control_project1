@@ -540,8 +540,8 @@ def preview_template(template_id: int, file: UploadFile = File(...), password: s
     data = file.file.read()
     if not data:
         raise HTTPException(400, "文件为空")
-    from algorithm.ocr.models import Template as ParseTemplate
     from algorithm.ocr.parse import parse
+    from services.template_parse import build_template
     # 加密件必须先解成明文副本：算法侧 parse 只认明文，直接喂加密字节会"成功"返回 0 笔
     from services.analysis import EncryptedFile, plain_bytes  # noqa: PLC0415
 
@@ -549,9 +549,9 @@ def preview_template(template_id: int, file: UploadFile = File(...), password: s
         raw = plain_bytes(data, password)
     except EncryptedFile as exc:
         raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
-    # 必须带 layout：不带的话列边界只能按表头词中心推算，试跑结果与真实解析不一致
-    tpl = ParseTemplate(bank_code=row.bank_code, version=row.version,
-                        field_map=dict(row.field_map or {}), layout=row.layout)
+    # 与真实解析共用同一个构造函数：带 layout（列边界）与 meta_boxes（卡号/户名这类单值）
+    tpl = build_template(bank_code=row.bank_code, version=row.version,
+                         field_map=row.field_map, layout=row.layout)
     parsed = parse(raw, tpl)
 
     # 逐页统计：用户要看到「模板在第 2、3…页还好不好用」，只给总笔数看不出问题页

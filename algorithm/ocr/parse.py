@@ -443,6 +443,14 @@ def _fill_header_from_boxes(
             value = _clean_name(match.group(1) if match else text)
             if value:
                 header.account_name = HeaderField(value=value, bbox=bbox, confidence=confidence)
+        elif box.field == "bank_branch" and header.bank_branch is None:
+            value = _clean_name(text)
+            if value and len(value) >= 2:
+                header.bank_branch = HeaderField(value=value, bbox=bbox, confidence=confidence)
+        elif box.field == "account_type" and header.account_type is None:
+            value = _clean_name(text)
+            if value and len(value) >= 2:
+                header.account_type = HeaderField(value=value, bbox=bbox, confidence=confidence)
         elif box.field == "period" and header.period_start is None:
             match = PERIOD_RE.search(compact)
             if not match:

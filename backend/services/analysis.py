@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from algorithm.ocr.parse import parse  # noqa: E402
-from algorithm.ocr.models import Template as ParseTemplate  # noqa: E402
+from algorithm.ocr.models import MetaBox, Template as ParseTemplate  # noqa: E402
 from algorithm.algo.file_layer import analyze_file  # noqa: E402
 from algorithm.algo.content_layer import analyze_content  # noqa: E402
 from algorithm.algo.ledger_layer import analyze_ledger  # noqa: E402
@@ -183,12 +183,13 @@ def run_analysis(
 
     tpl = None
     if template:
-        tpl = ParseTemplate(
+        from services.template_parse import build_template  # noqa: PLC0415
+
+        tpl = build_template(
             bank_code=str(template.get("bank_code", "UNKNOWN")),
             version=int(template.get("version", 1)),
-            field_map=dict(template.get("field_map", {})),
-            # 必须带上框画范围：不带的话解析只能按表头词中心推算列边界，
-            # 「改框画范围」就永远不会影响结果（这一点之前实测时漏掉了）
+            field_map=template.get("field_map", {}),
+            # 必须带上框画范围：不带的话解析只能按表头词中心推算列边界
             layout=template.get("layout"),
         )
 

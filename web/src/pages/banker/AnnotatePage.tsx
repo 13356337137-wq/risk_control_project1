@@ -30,6 +30,14 @@ import { COLUMN_LABELS, labelOf } from '../../lib/columns';
 type Draft = { field: string; x0: number; x1: number; cells: InspectBand['cells']; source: string };
 type Drag = { index: number; mode: 'move' | 'left' | 'right'; startX: number; x0: number; x1: number };
 type Source = { kind: 'sample'; label: string; sample: string } | { kind: 'file'; label: string; blob: Blob };
+type Single = { field: string; label: string; value: string; x: number; y: number; w: number; h: number; x0: number; x1: number; y0: number; y1: number };
+
+const SINGLE_FIELDS = [
+  { key: 'account_no', label: '卡号或账号' },
+  { key: 'account_name', label: '户名' },
+  { key: 'bank_branch', label: '开户行' },
+  { key: 'account_type', label: '账户类型' },
+];
 
 const BANKS = [
   { code: 'ICBC', label: '工商银行' }, { code: 'CCB', label: '建设银行' }, { code: 'ABC', label: '农业银行' },
@@ -49,6 +57,8 @@ export default function AnnotatePage() {
   const [pages, setPages] = useState<InspectPage[]>([]);
   const [pageIndex, setPageIndex] = useState(0);
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  // 单值字段（卡号/户名/开户行…）：整份文件只有一个值，不是列
+  const [singles, setSingles] = useState<Single[]>([]);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [bankCode, setBankCode] = useState('');
   const [keyword, setKeyword] = useState('卡号');
@@ -98,11 +108,14 @@ export default function AnnotatePage() {
       setPages(report.pages);
       setPageIndex(0);
       setDrafts(toDrafts(report.pages[0]));
+      setSingles(fromSingles(report.pages[0]));
       setOpenIndex(null);
       const bands = report.pages[0]?.bands.length ?? 0;
+      const singleCount = report.pages[0]?.singles?.length ?? 0;
       setMessage(
         report.text_layer
-          ? '系统认出 ' + bands + ' 列。下面每一列都显示它读到的前几个值，认错就改名字，偏了就拖左边那条线。'
+          ? '系统认出 ' + bands + ' 列' + (singleCount ? '，另有 ' + singleCount + ' 个单值信息（卡号、户名这类整份只有一个的）' : '') +
+            '。认错就改名字，偏了就拖左边那条线。'
           : '这份文件是扫描件（没有文字层），认不出列。请换一份电子版 PDF，或先在别处做 OCR。',
       );
     } catch (err) {
@@ -262,6 +275,16 @@ export default function AnnotatePage() {
           headerY: Number((headerY / height).toFixed(4)),
           columns,
         }],
+        // 单值字段：页内框（0-1 比例），解析时按框取值填到页眉（卡号/户名/开户行）
+        meta_boxes: singles.map((item) => ({
+          field: item.field,
+          // 解析侧页号从 1 起（交易行 page_no 也是 1 起），这里必须对齐，否则框永远匹配不到页
+          page: pageIndex + 1,
+          x: item.x,
+          y: item.y,
+          w: item.w,
+          h: item.h,
+        })),
       };
       const created = await createTemplate({ bank_code: bankCode, field_map: fieldMap });
       await updateTemplate(created.id, { field_map: fieldMap, layout });
@@ -419,6 +442,23 @@ export default function AnnotatePage() {
               <div className="canvas-wrap" style={{ width: canvasWidth || '100%', height: canvasHeight || 420 }}>
                 <canvas ref={canvasRef} />
                 {page
+                  ? singles.map((item, index) => (
+                      <div
+                        key={'single-' + index}
+                        className="single-box"
+                        style={{
+                          left: item.x * page.width * scale,
+                          top: item.y * page.height * scale,
+                          width: Math.max(8, item.w * page.width * scale),
+                          height: Math.max(8, item.h * page.height * scale),
+                        }}
+                        title={item.label + '：' + item.value}
+                      >
+                        <span className="single-label">{item.label}</span>
+                      </div>
+                    ))
+                  : null}
+                {page
                   ? drafts.map((draft, index) => (
                       <div
                         key={index}
@@ -513,6 +553,47 @@ export default function AnnotatePage() {
                 })}
               </div>
 
+              <div className="step-head">
+                <strong>单值信息（{singles.length}）</strong>
+                <span className="muted small">整份文件只有一个的属性，不是列</span>
+              </div>
+              <div className="band-list">
+                {singles.length === 0 ? (
+                  <p className="muted small">没找到卡号、户名这类单值信息。</p>
+                ) : (
+                  singles.map((item, index) => (
+                    <div key={index} className="band-item open">
+                      <div className="band-head" style={{ cursor: 'default' }}>
+                        <span className="band-caret">·</span>
+                        <span className="band-name">{item.label}</span>
+                        <span className="band-meta">{item.value}</span>
+                      </div>
+                      <div className="band-body">
+                        <label>
+                          这一项是什么？
+                          <select
+                            value={item.field}
+                            onChange={(event) =>
+                              setSingles((prev) => prev.map((row, i) => (i === index ? { ...row, field: event.target.value, label: labelOfSingle(event.target.value) } : row)))
+                            }
+                          >
+                            {SINGLE_FIELDS.map((field) => (
+                              <option key={field.key} value={field.key}>{field.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          className="link-btn danger"
+                          onClick={() => setSingles((prev) => prev.filter((_, i) => i !== index))}
+                        >
+                          这一项不要
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
               <div className="lab-save annotate-add">
                 <input placeholder="少了一列？输入表头上的字，如 卡号" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
                 <Button onClick={() => void addMissingColumn()} disabled={busy}>补一列</Button>
@@ -534,6 +615,22 @@ export default function AnnotatePage() {
       ) : null}
     </div>
   );
+}
+
+function fromSingles(page?: InspectPage): Single[] {
+  return (page?.singles ?? []).map((item) => ({
+    field: item.field,
+    label: item.label,
+    value: item.value,
+    x: item.x,
+    y: item.y,
+    w: item.w,
+    h: item.h,
+    x0: item.x0,
+    x1: item.x1,
+    y0: item.y0,
+    y1: item.y1,
+  }));
 }
 
 function toDrafts(page?: InspectPage): Draft[] {
@@ -563,6 +660,10 @@ function dedupe(drafts: Draft[]): Draft[] {
     out.push({ ...draft });
   }
   return out;
+}
+
+function labelOfSingle(field: string) {
+  return SINGLE_FIELDS.find((item) => item.key === field)?.label ?? field;
 }
 
 function bankLabel(code: string) {

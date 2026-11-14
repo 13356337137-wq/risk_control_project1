@@ -79,12 +79,16 @@ class PageHeader(BaseModel):
     account_name: HeaderField | None = None
     period_start: HeaderField | None = None
     period_end: HeaderField | None = None
+    # 单值属性（不是跨页比对字段，但报告要用）：开户行与账户类型
+    bank_branch: HeaderField | None = None
+    account_type: HeaderField | None = None
 
     @property
     def is_empty(self) -> bool:
         return all(
             getattr(self, field) is None
-            for field in ("account_no", "account_name", "period_start", "period_end")
+            for field in ("account_no", "account_name", "period_start", "period_end",
+                          "bank_branch", "account_type")
         )
 
 

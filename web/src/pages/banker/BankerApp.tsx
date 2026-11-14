@@ -1,4 +1,4 @@
-import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
+import { NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import { clearSession, getUser } from '../../auth/store';
 import TaskListPage from './TaskListPage';
 import ReportPage from './ReportPage';
@@ -12,6 +12,7 @@ import OcrRoutingPage from './OcrRoutingPage';
 import TemplatesPage from './TemplatesPage';
 import TemplateDetailPage from './TemplateDetailPage';
 import TemplateLayoutPage from './TemplateLayoutPage';
+import DashboardPage from './DashboardPage';
 import GlossaryPage from './GlossaryPage';
 import MetricDefsPage from './MetricDefsPage';
 import VerificationDefsPage from './VerificationDefsPage';
@@ -58,6 +59,7 @@ export default function BankerApp() {
         <nav className="sider">
           <div className="sider-group">
             <span className="sider-title">受理与报告</span>
+            <NavLink to="/bank" end>看板</NavLink>
             <NavLink to="/bank/tasks">任务与报告</NavLink>
           </div>
           <div className="sider-group">
@@ -82,7 +84,7 @@ export default function BankerApp() {
 
         <main className="content">
           <Routes>
-            <Route index element={<Navigate to="tasks" replace />} />
+            <Route index element={<DashboardPage />} />
             <Route path="tasks" element={<TaskListPage />} />
             <Route path="report/:id" element={<ReportPage />} />
             <Route path="annotate" element={<AnnotatePage />} />

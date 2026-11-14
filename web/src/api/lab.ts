@@ -55,6 +55,21 @@ export type InspectBand = {
   x1: number;
   cells: InspectCell[];
 };
+export type InspectSingle = {
+  field: string;
+  label: string;
+  page: number;
+  value: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+};
+
 export type InspectPage = {
   index: number;
   width: number;
@@ -62,6 +77,7 @@ export type InspectPage = {
   lines: number;
   header_y: number | null;
   bands: InspectBand[];
+  singles: InspectSingle[];
   has_text: boolean;
 };
 export type InspectReport = { pages: InspectPage[]; page_count: number; text_layer: boolean };

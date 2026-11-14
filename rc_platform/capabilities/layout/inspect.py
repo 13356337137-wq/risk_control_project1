@@ -147,7 +147,11 @@ def inspect(data: bytes, password: str | None = None) -> dict:
             region = detect.detect_page(page)
         except Exception:  # noqa: BLE001 - 单页识别失败不该让整份样本看不出东西
             region = None
-        reports.append(_page_report(index, page, region))
+        report = _page_report(index, page, region)
+        # 单值字段（卡号/户名/开户行…）：它们不是列，混在列带里会让人没法用
+        column_fields = {band["field"] for band in report["bands"]}
+        report["singles"] = _singles(index, page, tokens[index], column_fields)
+        reports.append(report)
     return {
         "pages": reports,
         "page_count": len(reports),
@@ -207,3 +211,106 @@ def spread(data: bytes, keyword: str, page_index: int | None = None, password: s
                     break
 
     return {"keyword": keyword, "page_count": len(pages), "bands": hits}
+
+# ---------------------------------------------------------------- 单值字段
+# 不是所有要提取的东西都是「列」。卡号、户名、开户行这类属性整份文件只有一个，
+# 按列扩散会得到一条只有一格的列带，语义是错的——它们是「页内的一个框」。
+SINGLE_LABELS: list[tuple[str, str]] = [
+    ("卡号", "account_no"),
+    ("账号", "account_no"),
+    ("账户号", "account_no"),
+    ("户名", "account_name"),
+    ("账户名称", "account_name"),
+    ("客户名称", "account_name"),
+    ("开户行", "bank_branch"),
+    ("开户机构", "bank_branch"),
+    ("账户类型", "account_type"),
+]
+SINGLE_FIELD_LABEL = {
+    "account_no": "卡号或账号",
+    "account_name": "户名",
+    "bank_branch": "开户行",
+    "account_type": "账户类型",
+}
+
+
+def _singles(page_index: int, page: PageWords, tokens_per_line: list[list[Word]],
+             column_fields: set[str]) -> list[dict]:
+    """在一个页面上找「单值字段」：标签 + 紧邻的值，且该标签不构成一列。
+
+    判据三条，缺一不可：
+      ① 命中预设标签（卡号/户名/开户行…）；
+      ② 同一标签在整页只出现一次（出现多次说明它其实是一列的表头）；
+      ③ 能取到值（同行右侧优先，其次正下方）。
+    """
+    found: list[dict] = []
+    seen_fields: set[str] = set()
+
+    for line_no, tokens in enumerate(tokens_per_line):
+        for token in tokens:
+            # 标签必须出现在词首：表头上的「对方户名」里有「户名」，按包含匹配会误判成单值
+            body = token.text.strip()
+            label = next((text for text, _ in SINGLE_LABELS if body.startswith(text)), None)
+            if label is None:
+                continue
+            field = dict(SINGLE_LABELS)[label]
+            if field in seen_fields or field in column_fields:
+                continue
+
+            # ② 以标签开头的词在全页只出现一次（出现多次说明它是一列的表头）
+            occurrences = sum(
+                1 for other_line in tokens_per_line for other in other_line
+                if other.text.strip().startswith(label)
+            )
+            if occurrences > 1:
+                continue
+
+            # ③ 取值：标签词自带的值 + 同一行右侧紧跟的词；都没有就取正下方
+            value_words: list[Word] = []
+            rest = body.split(label, 1)[1].strip(" ：:　")
+            if rest:
+                value_words = [Word(text=rest, x0=token.x0, x1=token.x1, top=token.top, bottom=token.bottom)]
+            cursor = value_words[-1].x1 if value_words else token.x1
+            for other in tokens:
+                if other is token or other.x0 <= cursor:
+                    continue
+                if other.x0 - cursor > page.width * 0.06:      # 同行但隔得远 = 另一个字段
+                    break
+                value_words.append(other)
+                cursor = other.x1
+            if not value_words and line_no + 1 < len(tokens_per_line):
+                below = [
+                    other for other in tokens_per_line[line_no + 1]
+                    if abs(other.x0 - token.x0) < page.width * 0.12
+                ]
+                value_words = below[:2]
+
+            if not value_words:
+                continue
+
+            value = "".join(word.text for word in value_words).strip()
+            if not value:
+                continue
+
+            left = min([token.x0] + [word.x0 for word in value_words])
+            right = max([token.x1] + [word.x1 for word in value_words])
+            top = min([token.top] + [word.top for word in value_words])
+            bottom = max([token.bottom] + [word.bottom for word in value_words])
+            seen_fields.add(field)
+            found.append({
+                "field": field,
+                "label": SINGLE_FIELD_LABEL.get(field, field),
+                "page": page_index,
+                "value": value,
+                # 归一化：与模板 meta_boxes 的口径一致（左上原点，0-1）
+                "x": round(max(0.0, left - 2) / page.width, 4),
+                "y": round(max(0.0, top - 2) / page.height, 4),
+                "w": round(min(page.width, right + 2) / page.width - max(0.0, left - 2) / page.width, 4),
+                "h": round(min(page.height, bottom + 2) / page.height - max(0.0, top - 2) / page.height, 4),
+                # 点坐标：画布直接用
+                "x0": round(left, 2),
+                "x1": round(right, 2),
+                "y0": round(top, 2),
+                "y1": round(bottom, 2),
+            })
+    return found

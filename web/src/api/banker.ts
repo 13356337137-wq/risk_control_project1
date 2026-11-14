@@ -119,6 +119,37 @@ export async function getTaskFile(taskId: number): Promise<Blob> {
   return await response.blob();
 }
 
+export type DashboardData = {
+  summary: {
+    tasks: number;
+    done: number;
+    failed: number;
+    txn_total: number;
+    avg_txn: number;
+    coverage_warn: number;
+    threshold_version: number;
+    custom_metrics: number;
+  };
+  verdicts: { verdict: string; count: number }[];
+  grades: { grade: string; label: string; count: number }[];
+  banks: { bank_code: string; tasks: number; txn: number }[];
+  threshold_hits: { code: string; name: string; count: number; threshold_key: string | null }[];
+  recent: {
+    task_id: number;
+    biz_no: string;
+    status: string;
+    bank_code: string | null;
+    verdict: string | null;
+    overall: number | null;
+    grade: string | null;
+    txn_count: number;
+  }[];
+};
+
+export function getDashboard(): Promise<DashboardData> {
+  return request<DashboardData>('/dashboard');
+}
+
 export type AuditRow = {
   id: number;
   actor_id: number | null;
