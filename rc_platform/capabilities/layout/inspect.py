@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from . import detect
+from . import keywords as kw
 from .words import Line, PageWords, Word, group_lines, merge_tokens, read_pages
 
 MIN_HITS = 2
@@ -24,6 +25,24 @@ FOOTER_WORDS = ("本页", "合计", "小计", "共计", "以上", "打印", "第
 
 def _tokens(pages: list[PageWords]) -> list[list[list[Word]]]:
     return [[merge_tokens(line) for line in group_lines(page.words)] for page in pages]
+
+
+def _header_line_index(tokens_per_line: list[list[Word]]) -> int:
+    """找表头所在行：前 30 行里，能被认成表头词的 token 最多的那一行。
+
+    不能用「页面前 40% 的行数」当上限：短页面（样例只有 8 行）会把真正的表头切掉，
+    于是表头那一行被当成数据，画面上就是「列名也进了第一个红框」。
+    """
+    limit = min(len(tokens_per_line), 30)
+    best_index, best_hits = 0, 0
+    for index, tokens in enumerate(tokens_per_line[:limit]):
+        hits = 0
+        for token in tokens:
+            if kw.match_header_field(token.text):
+                hits += 1
+        if hits > best_hits:
+            best_index, best_hits = index, hits
+    return best_index if best_hits >= 1 else -1
 
 
 def _value_like(text: str) -> bool:
@@ -94,18 +113,10 @@ def _page_report(index: int, page: PageWords, region) -> dict:
         header_y = region.header_y
         if header_y is not None and header_y <= 1.0:
             header_y = header_y * page.height      # 契约定的是归一化，画布要用点
-        header_index = -1
-        if header_y is not None:
-            # 取「包含表头 y 的那一行」，不是「表头之上的第一行」——
-            # 页面顶部还有行名/账号等行，取错会把表头自己当成第一个数据格。
-            for i, tokens in enumerate(tokens_per_line):
-                if not tokens:
-                    continue
-                if tokens[0].top - 1 <= header_y <= tokens[0].bottom + 1:
-                    header_index = i
-                    break
-        if header_index < 0:
-            header_index = 0
+        # 表头行的判定不靠坐标猜，靠「这一行里有几个能认出来的表头词」：
+        # 版式检测给出的 header_y 在页眉文字多的件上会偏，偏了就会把表头自己当成第一格数据处理，
+        # 画面上表现为「框里把列名也圈进去了」。
+        header_index = _header_line_index(tokens_per_line)
         for column in region.columns:
             x0 = column.x * page.width
             x1 = (column.x + column.w) * page.width

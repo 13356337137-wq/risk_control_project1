@@ -105,6 +105,7 @@ export default function AnnotatePage() {
         current.kind === 'sample'
           ? await inspectSample(current.sample)
           : await inspectFile(current.blob, secret ?? password);
+      setNeedPassword(false);   // 口令对了就收起输入框，别一直挂在那儿
       setPages(report.pages);
       setPageIndex(0);
       setDrafts(toDrafts(report.pages[0]));
@@ -144,7 +145,15 @@ export default function AnnotatePage() {
     (async () => {
       const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
       pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-      const doc = await pdfjs.getDocument({ url: pdfUrl, password: password || undefined }).promise;
+      const doc = await pdfjs.getDocument({
+        url: pdfUrl,
+        password: password || undefined,
+        // 中文银行流水多用 CID 字体：不带 cMap 时 pdf.js 画不出字，画布一片白，
+        // 只剩我们叠上去的框——使用者自然觉得「框是乱画的」。
+        cMapUrl: '/cmaps/',
+        cMapPacked: true,
+        standardFontDataUrl: '/standard_fonts/',
+      }).promise;
       const pdfPage = await doc.getPage(pageIndex + 1);
       const base = pdfPage.getViewport({ scale: 1 });
       const containerWidth = stageRef.current?.clientWidth ?? 800;
@@ -439,6 +448,12 @@ export default function AnnotatePage() {
                 </span>
               </div>
 
+              <p className="legend">
+                <span className="legend-item"><i className="swatch swatch-col" />蓝框＝一列（每行都有），框里的小格是这一列读到的每个值</span>
+                <span className="legend-item"><i className="swatch swatch-single" />紫框＝整份只有一个的信息（卡号、户名这类）</span>
+                <span className="legend-item">框的位置就是系统实际取值的位置，可以拖动校正</span>
+              </p>
+
               <div className="canvas-wrap" style={{ width: canvasWidth || '100%', height: canvasHeight || 420 }}>
                 <canvas ref={canvasRef} />
                 {page
@@ -463,17 +478,22 @@ export default function AnnotatePage() {
                       <div
                         key={index}
                         className={'band' + (openIndex === index ? ' selected' : '')}
-                        style={{
-                          left: draft.x0 * scale,
-                          width: Math.max(6, (draft.x1 - draft.x0) * scale),
-                          top: (page.header_y ?? 0) * scale,
-                          height: Math.max(
-                            12,
-                            (draft.cells.length
-                              ? Math.max(...draft.cells.map((cell) => cell.y1)) - (page.header_y ?? 0)
-                              : page.height - (page.header_y ?? 0)) * scale,
-                          ),
-                        }}
+                        style={(() => {
+                          // 框只该圈住「实际读到的格子」：从第一个格子上沿到最后一行下沿。
+                          // 用表头 y 当起点会把列名也圈进去，看着像系统把标题当数据。
+                          const top = draft.cells.length
+                            ? Math.min(...draft.cells.map((cell) => cell.y0))
+                            : (page.header_y ?? page.height * 0.1);
+                          const bottom = draft.cells.length
+                            ? Math.max(...draft.cells.map((cell) => cell.y1))
+                            : page.height;
+                          return {
+                            left: draft.x0 * scale,
+                            width: Math.max(6, (draft.x1 - draft.x0) * scale),
+                            top: top * scale,
+                            height: Math.max(12, (bottom - top) * scale),
+                          };
+                        })()}
                         onPointerDown={(event) => onPointerDown(event, index, 'move')}
                         title={labelOf(draft.field) + ' · 读到 ' + draft.cells.length + ' 个值'}
                       >
@@ -486,7 +506,7 @@ export default function AnnotatePage() {
                             className="cell"
                             style={{
                               left: (cell.x0 - draft.x0) * scale,
-                              top: (cell.y0 - (page.header_y ?? 0)) * scale,
+                              top: (cell.y0 - (draft.cells.length ? Math.min(...draft.cells.map((item) => item.y0)) : (page.header_y ?? 0))) * scale,
                               width: Math.max(2, (cell.x1 - cell.x0) * scale),
                               height: Math.max(2, (cell.y1 - cell.y0) * scale),
                             }}

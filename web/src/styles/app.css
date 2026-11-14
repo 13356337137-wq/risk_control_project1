@@ -448,3 +448,8 @@ table.grid tr.active-row { background: #fff7e6; box-shadow: inset 3px 0 0 #f59e0
 /* 单值字段框：紫色，与「列」的蓝色区分开 */
 .single-box { position: absolute; border: 1.5px solid rgba(124, 58, 237, .75); background: rgba(124, 58, 237, .1); border-radius: 3px; }
 .single-label { position: absolute; top: -16px; left: 0; font-size: 10.5px; color: #7c3aed; white-space: nowrap; background: #fff; padding: 0 3px; border-radius: 3px; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
+.swatch-col { border: 1.5px solid rgba(37, 99, 235, .7); background: rgba(37, 99, 235, .1); }
+.swatch-single { border: 1.5px solid rgba(124, 58, 237, .8); background: rgba(124, 58, 237, .12); }

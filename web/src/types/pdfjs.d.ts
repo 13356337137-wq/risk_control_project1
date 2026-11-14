@@ -1,6 +1,14 @@
 declare module 'pdfjs-dist/build/pdf.mjs' {
   export const GlobalWorkerOptions: { workerSrc: string; workerPort: Worker | null };
-  export function getDocument(src: string | { url: string; password?: string }): {
+  export function getDocument(
+    src: string | {
+      url: string;
+      password?: string;
+      cMapUrl?: string;
+      cMapPacked?: boolean;
+      standardFontDataUrl?: string;
+    },
+  ): {
     promise: Promise<{
       numPages: number;
       getPage(index: number): Promise<{
