@@ -29,6 +29,16 @@ import { COLUMN_LABELS, labelOf } from '../../lib/columns';
  */
 type Draft = { field: string; x0: number; x1: number; cells: InspectBand['cells']; source: string };
 type Drag = { index: number; mode: 'move' | 'left' | 'right'; startX: number; x0: number; x1: number };
+type SingleDrag = {
+  index: number;
+  mode: 'move' | 'right' | 'bottom' | 'corner';
+  startX: number;
+  startY: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
 type Source = { kind: 'sample'; label: string; sample: string } | { kind: 'file'; label: string; blob: Blob };
 type Single = { field: string; label: string; value: string; x: number; y: number; w: number; h: number; x0: number; x1: number; y0: number; y1: number };
 
@@ -71,6 +81,9 @@ export default function AnnotatePage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<Drag | null>(null);
+  const singleDragRef = useRef<SingleDrag | null>(null);
+  // 聚焦：列多的时候只看一列，其余变淡
+  const [focus, setFocus] = useState<{ kind: 'col' | 'single'; index: number } | null>(null);
   const renderTaskRef = useRef<{ cancel(): void } | null>(null);
   const [fitScale, setFitScale] = useState(1);
   const [zoom, setZoom] = useState(1.35);
@@ -197,6 +210,7 @@ export default function AnnotatePage() {
     const draft = drafts[index];
     dragRef.current = { index, mode, startX: toPage(event.clientX), x0: draft.x0, x1: draft.x1 };
     setOpenIndex(index);
+    setFocus({ kind: 'col', index });
     (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
   }
 
@@ -210,6 +224,52 @@ export default function AnnotatePage() {
         if (drag.mode === 'move') return { ...item, x0: drag.x0 + delta, x1: drag.x1 + delta };
         if (drag.mode === 'left') return { ...item, x0: Math.min(drag.x0 + delta, item.x1 - 6) };
         return { ...item, x1: Math.max(drag.x1 + delta, item.x0 + 6) };
+      }),
+    );
+  }
+
+  function onPointerUp() {
+    dragRef.current = null;
+    singleDragRef.current = null;
+  }
+
+  const toPageY = (clientY: number) => {
+    const rect = stageRef.current?.getBoundingClientRect();
+    if (!rect) return 0;
+    return (clientY - rect.top) / scale;
+  };
+
+  function onSingleDown(event: React.PointerEvent, index: number, mode: SingleDrag['mode']) {
+    event.stopPropagation();
+    const item = singles[index];
+    singleDragRef.current = {
+      index, mode,
+      startX: toPage(event.clientX),
+      startY: toPageY(event.clientY),
+      x: item.x, y: item.y, w: item.w, h: item.h,
+    };
+    setFocus({ kind: 'single', index });
+    (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
+  }
+
+  function onSingleMove(event: React.PointerEvent) {
+    const drag = singleDragRef.current;
+    if (!drag || !page) return;
+    const dx = (toPage(event.clientX) - drag.startX) / page.width;
+    const dy = (toPageY(event.clientY) - drag.startY) / page.height;
+    setSingles((prev) =>
+      prev.map((item, index) => {
+        if (index !== drag.index) return item;
+        if (drag.mode === 'move') {
+          return { ...item, x: clamp01(drag.x + dx, 0, 1 - drag.w), y: clamp01(drag.y + dy, 0, 1 - drag.h) };
+        }
+        if (drag.mode === 'right') return { ...item, w: Math.max(0.01, Math.min(1 - item.x, drag.w + dx)) };
+        if (drag.mode === 'bottom') return { ...item, h: Math.max(0.005, Math.min(1 - item.y, drag.h + dy)) };
+        return {
+          ...item,
+          w: Math.max(0.01, Math.min(1 - item.x, drag.w + dx)),
+          h: Math.max(0.005, Math.min(1 - item.y, drag.h + dy)),
+        };
       }),
     );
   }
@@ -420,7 +480,15 @@ export default function AnnotatePage() {
           </div>
 
           <div className="annotate">
-            <div className="annotate-stage" ref={stageRef} onPointerMove={onPointerMove} onPointerUp={() => (dragRef.current = null)}>
+            <div
+              className="annotate-stage"
+              ref={stageRef}
+              onPointerMove={(event) => {
+                onPointerMove(event);
+                onSingleMove(event);
+              }}
+              onPointerUp={onPointerUp}
+            >
               <div className="stage-bar">
                 <span className="muted small">
                   第 {pageIndex + 1}/{pages.length || 1} 页
@@ -460,16 +528,24 @@ export default function AnnotatePage() {
                   ? singles.map((item, index) => (
                       <div
                         key={'single-' + index}
-                        className="single-box"
+                        className={
+                          'single-box' +
+                          (focus?.kind === 'single' && focus.index === index ? ' focused' : '') +
+                          (focus && !(focus.kind === 'single' && focus.index === index) ? ' dim' : '')
+                        }
                         style={{
                           left: item.x * page.width * scale,
                           top: item.y * page.height * scale,
                           width: Math.max(8, item.w * page.width * scale),
                           height: Math.max(8, item.h * page.height * scale),
                         }}
-                        title={item.label + '：' + item.value}
+                        title={item.label + '：' + item.value + '（拖动移动，拉右下角改大小）'}
+                        onPointerDown={(event) => onSingleDown(event, index, 'move')}
                       >
                         <span className="single-label">{item.label}</span>
+                        <span className="single-handle right" onPointerDown={(event) => onSingleDown(event, index, 'right')} />
+                        <span className="single-handle bottom" onPointerDown={(event) => onSingleDown(event, index, 'bottom')} />
+                        <span className="single-handle corner" onPointerDown={(event) => onSingleDown(event, index, 'corner')} />
                       </div>
                     ))
                   : null}
@@ -477,7 +553,12 @@ export default function AnnotatePage() {
                   ? drafts.map((draft, index) => (
                       <div
                         key={index}
-                        className={'band' + (openIndex === index ? ' selected' : '')}
+                        className={
+                          'band' +
+                          (openIndex === index ? ' selected' : '') +
+                          (focus?.kind === 'col' && focus.index === index ? ' focused' : '') +
+                          (focus && !(focus.kind === 'col' && focus.index === index) ? ' dim' : '')
+                        }
                         style={(() => {
                           // 框只该圈住「实际读到的格子」：从第一个格子上沿到最后一行下沿。
                           // 用表头 y 当起点会把列名也圈进去，看着像系统把标题当数据。
@@ -487,9 +568,14 @@ export default function AnnotatePage() {
                           const bottom = draft.cells.length
                             ? Math.max(...draft.cells.map((cell) => cell.y1))
                             : page.height;
+                          // 表头比数据短时框会显得贴着一串数字：给一个最小宽度并以读取区域中心对齐，
+                          // 这样看起来是「框住这一列」，而不是「贴着几个数字」。
+                          const minWidth = page.width * 0.03;
+                          const boxWidth = Math.max(draft.x1 - draft.x0, minWidth);
+                          const boxLeft = (draft.x0 + draft.x1) / 2 - boxWidth / 2;
                           return {
-                            left: draft.x0 * scale,
-                            width: Math.max(6, (draft.x1 - draft.x0) * scale),
+                            left: boxLeft * scale,
+                            width: Math.max(6, boxWidth * scale),
                             top: top * scale,
                             height: Math.max(12, (bottom - top) * scale),
                           };
@@ -529,7 +615,14 @@ export default function AnnotatePage() {
                   const open = openIndex === index;
                   return (
                     <div key={index} className={'band-item' + (open ? ' open' : '')}>
-                      <button className="band-head" onClick={() => setOpenIndex(open ? null : index)} aria-expanded={open}>
+                      <button
+                        className="band-head"
+                        onClick={() => {
+                          setOpenIndex(open ? null : index);
+                          setFocus(focus?.kind === 'col' && focus.index === index ? null : { kind: 'col', index });
+                        }}
+                        aria-expanded={open}
+                      >
                         <span className="band-caret">{open ? '▾' : '▸'}</span>
                         <span className="band-name">{labelOf(draft.field)}</span>
                         <span className="band-meta">读到 {draft.cells.length} 个值</span>
@@ -601,6 +694,24 @@ export default function AnnotatePage() {
                               <option key={field.key} value={field.key}>{field.label}</option>
                             ))}
                           </select>
+                        </label>
+                        <label>
+                          位置与大小（%）
+                          <span className="inline-pair">
+                            <input type="number" step="0.5" value={round1(item.x * 100)}
+                                   onChange={(event) => setSingles((prev) => prev.map((row, i) => (i === index ? { ...row, x: Number(event.target.value) / 100 } : row)))} />
+                            <input type="number" step="0.5" value={round1(item.y * 100)}
+                                   onChange={(event) => setSingles((prev) => prev.map((row, i) => (i === index ? { ...row, y: Number(event.target.value) / 100 } : row)))} />
+                          </span>
+                        </label>
+                        <label>
+                          宽高（%）
+                          <span className="inline-pair">
+                            <input type="number" step="0.5" value={round1(item.w * 100)}
+                                   onChange={(event) => setSingles((prev) => prev.map((row, i) => (i === index ? { ...row, w: Number(event.target.value) / 100 } : row)))} />
+                            <input type="number" step="0.5" value={round1(item.h * 100)}
+                                   onChange={(event) => setSingles((prev) => prev.map((row, i) => (i === index ? { ...row, h: Number(event.target.value) / 100 } : row)))} />
+                          </span>
                         </label>
                         <button
                           className="link-btn danger"
@@ -680,6 +791,14 @@ function dedupe(drafts: Draft[]): Draft[] {
     out.push({ ...draft });
   }
   return out;
+}
+
+function round1(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
+function clamp01(value: number, low: number, high: number) {
+  return Math.min(Math.max(value, low), Math.max(low, high));
 }
 
 function labelOfSingle(field: string) {

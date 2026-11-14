@@ -453,3 +453,12 @@ table.grid tr.active-row { background: #fff7e6; box-shadow: inset 3px 0 0 #f59e0
 .swatch { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
 .swatch-col { border: 1.5px solid rgba(37, 99, 235, .7); background: rgba(37, 99, 235, .1); }
 .swatch-single { border: 1.5px solid rgba(124, 58, 237, .8); background: rgba(124, 58, 237, .12); }
+/* 单值框的缩放手柄与聚焦 */
+.single-handle { position: absolute; background: rgba(124, 58, 237, .55); }
+.single-handle.right { right: -3px; top: 0; width: 6px; height: 100%; cursor: ew-resize; }
+.single-handle.bottom { bottom: -3px; left: 0; height: 6px; width: 100%; cursor: ns-resize; }
+.single-handle.corner { right: -4px; bottom: -4px; width: 9px; height: 9px; border-radius: 2px; cursor: nwse-resize; }
+.single-box { cursor: move; }
+.single-box.focused { border-color: #6d28d9; box-shadow: 0 0 0 2px rgba(124, 58, 237, .25); }
+.band.focused { border-color: #1d4ed8; box-shadow: 0 0 0 2px rgba(37, 99, 235, .22); }
+.band.dim, .single-box.dim { opacity: .25; }
