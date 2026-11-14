@@ -229,7 +229,6 @@ export default function AnnotatePage() {
     }
   }
 
-  const current = selected === null ? null : drafts[selected];
   const canvasWidth = page ? page.width * scale : 0;
   const canvasHeight = page ? page.height * scale : 0;
 
@@ -325,69 +324,83 @@ export default function AnnotatePage() {
             <Button onClick={() => void addByKeyword()} disabled={busy}>按关键词加列</Button>
           </div>
 
-          {current ? (
-            <div className="band-editor">
-              <label>
-                字段
-                <select
-                  value={current.field}
-                  onChange={(event) =>
-                    setDrafts((prev) => prev.map((item, index) => (index === selected ? { ...item, field: event.target.value } : item)))
-                  }
-                >
-                  {FIELDS.map((field) => (
-                    <option key={field} value={field}>{field}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                x0 / x1（pt）
-                <span className="inline-pair">
-                  <input
-                    type="number"
-                    value={Math.round(current.x0)}
-                    onChange={(event) =>
-                      setDrafts((prev) => prev.map((item, index) => (index === selected ? { ...item, x0: Number(event.target.value) } : item)))
-                    }
-                  />
-                  <input
-                    type="number"
-                    value={Math.round(current.x1)}
-                    onChange={(event) =>
-                      setDrafts((prev) => prev.map((item, index) => (index === selected ? { ...item, x1: Number(event.target.value) } : item)))
-                    }
-                  />
-                </span>
-              </label>
-              <p className="muted small">
-                来源 {current.source} · {current.cells.length} 个单元格
-              </p>
-              <button
-                className="link-btn danger"
-                onClick={() => {
-                  setDrafts((prev) => prev.filter((_, index) => index !== selected));
-                  setSelected(null);
-                }}
-              >
-                删掉这一列
-              </button>
-            </div>
-          ) : null}
+          <div className="band-list">
+            {drafts.length === 0 ? <p className="muted small">还没有列带。用上面的关键词加一条。</p> : null}
+            {drafts.map((draft, index) => {
+              const open = selected === index;
+              return (
+                <div key={index} className={'band-item' + (open ? ' open' : '')}>
+                  {/* 一行一个字段：点它才在这一行下面展开设置，不共用一个设置框 */}
+                  <button
+                    className="band-head"
+                    onClick={() => setSelected(open ? null : index)}
+                    aria-expanded={open}
+                  >
+                    <span className="band-caret">{open ? '▾' : '▸'}</span>
+                    <span className="band-name">{draft.field}</span>
+                    <span className="band-meta">
+                      {Math.round(draft.x0)}–{Math.round(draft.x1)} · {draft.cells.length} 格
+                    </span>
+                  </button>
 
-          <table className="grid compact annotate-list">
-            <thead>
-              <tr><th>字段</th><th>x 范围</th><th>格</th></tr>
-            </thead>
-            <tbody>
-              {drafts.map((draft, index) => (
-                <tr key={index} className={selected === index ? 'active-row' : ''} onClick={() => setSelected(index)}>
-                  <td>{draft.field}</td>
-                  <td className="small muted">{Math.round(draft.x0)}–{Math.round(draft.x1)}</td>
-                  <td className="small muted">{draft.cells.length}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  {open ? (
+                    <div className="band-body">
+                      <label>
+                        字段
+                        <select
+                          value={draft.field}
+                          onChange={(event) =>
+                            setDrafts((prev) =>
+                              prev.map((item, i) => (i === index ? { ...item, field: event.target.value } : item)),
+                            )
+                          }
+                        >
+                          {/* 系统认出来的字段名可能是 FIELDS 里没有的写法（如 counterparty），
+                              必须原样列出来，否则下拉会显示成第一个选项，一碰就悄悄改了字段 */}
+                          {(FIELDS.includes(draft.field) ? FIELDS : [draft.field, ...FIELDS]).map((field) => (
+                            <option key={field} value={field}>{field}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        x0 / x1（pt）
+                        <span className="inline-pair">
+                          <input
+                            type="number"
+                            value={Math.round(draft.x0)}
+                            onChange={(event) =>
+                              setDrafts((prev) =>
+                                prev.map((item, i) => (i === index ? { ...item, x0: Number(event.target.value) } : item)),
+                              )
+                            }
+                          />
+                          <input
+                            type="number"
+                            value={Math.round(draft.x1)}
+                            onChange={(event) =>
+                              setDrafts((prev) =>
+                                prev.map((item, i) => (i === index ? { ...item, x1: Number(event.target.value) } : item)),
+                              )
+                            }
+                          />
+                        </span>
+                      </label>
+                      <p className="muted small">来源 {draft.source} · {draft.cells.length} 个单元格</p>
+                      <button
+                        className="link-btn danger"
+                        onClick={() => {
+                          setDrafts((prev) => prev.filter((_, i) => i !== index));
+                          setSelected(null);
+                        }}
+                      >
+                        删掉这一列
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
 
           <p className="muted small">
             没有文字层的扫描件会一条都扩不出来——那不是画布的问题，要走 OCR。保存的是列带（相对宽度），

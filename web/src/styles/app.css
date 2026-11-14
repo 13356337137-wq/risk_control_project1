@@ -354,3 +354,25 @@ ul.plain { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--muted)
 .chip:hover { background: #eef4ff; border-color: var(--brand); }
 .lab-item.active { background: #eef4ff; border-color: var(--brand); }
 .lab-guide code { background: #f1f5f9; padding: 1px 5px; border-radius: 5px; font-size: 12px; }
+/* 手风琴：点哪个字段就在哪个字段下面展开设置 */
+.band-list { display: grid; gap: 6px; }
+.band-item { border: 1px solid var(--line); border-radius: 10px; background: #fff; overflow: hidden; }
+.band-item.open { border-color: var(--brand); box-shadow: 0 1px 6px rgba(37, 99, 235, .08); }
+.band-head {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center;
+  width: 100%; padding: 9px 10px; border: 0; background: transparent; cursor: pointer;
+  font-family: inherit; font-size: 13px; text-align: left;
+}
+.band-head:hover { background: #f8fbff; }
+.band-caret { color: var(--muted); font-size: 11px; }
+.band-name { font-weight: 600; color: var(--ink); }
+.band-meta { font-size: 12px; color: var(--muted); }
+.band-body {
+  display: grid; gap: 8px; padding: 10px 12px 12px; border-top: 1px dashed var(--line);
+  background: #fbfdff;
+}
+.band-body label { display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.band-body select, .band-body input {
+  height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px;
+  font-family: inherit; font-size: 13px; width: 100%; background: #fff;
+}
