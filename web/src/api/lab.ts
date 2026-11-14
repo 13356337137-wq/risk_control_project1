@@ -86,6 +86,19 @@ export function spreadKeyword(sample: string, keyword: string): Promise<SpreadRe
   );
 }
 
+export function inspectFile(file: Blob): Promise<InspectReport> {
+  const form = new FormData();
+  form.append('file', file, 'upload.pdf');
+  return request<InspectReport>('/lab/inspect-file', { form, timeoutMs: 180000 });
+}
+
+export function spreadFile(file: Blob, keyword: string): Promise<SpreadReport> {
+  const form = new FormData();
+  form.append('file', file, 'upload.pdf');
+  form.append('keyword', keyword);
+  return request<SpreadReport>('/lab/spread-file', { form, timeoutMs: 180000 });
+}
+
 export function sampleFileUrl(sample: string): string {
   return '/api/v1/lab/sample-file?sample=' + encodeURIComponent(sample);
 }

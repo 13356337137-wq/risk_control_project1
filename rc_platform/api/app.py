@@ -243,6 +243,29 @@ def list_samples():
     }
 
 
+@app.post("/api/v1/lab/inspect-file")
+async def inspect_upload(file: UploadFile):
+    from rc_platform.capabilities.layout import inspect as layout_inspect
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "文件为空"})
+    try:
+        return layout_inspect.inspect(data)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, detail={"code": "E_INSPECT", "message": f"版式分析失败：{exc}"}) from exc
+
+
+@app.post("/api/v1/lab/spread-file")
+async def spread_upload(file: UploadFile, keyword: str = Form(...)):
+    from rc_platform.capabilities.layout import inspect as layout_inspect
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "文件为空"})
+    return layout_inspect.spread(data, keyword)
+
+
 @app.get("/api/v1/lab/sample-file")
 def sample_file(sample: str):
     from fastapi.responses import FileResponse

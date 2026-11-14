@@ -112,6 +112,11 @@ def _page_report(index: int, page: PageWords, region) -> dict:
             cells = _collect_cells(tokens_per_line, header_index + 1, (x0 + x1) / 2,
                                    max((x1 - x0) / 2, page.width * 0.01) + page.width * 0.012,
                                    page.width)
+            # 列带按「实际捡到的单元格」扩到包络：表头词往往比数据窄（「摘要」两个字 vs
+            # 「工资代发-某公司」），只画表头宽度会让人以为没对准。
+            if cells:
+                x0 = min([x0] + [item["x0"] for item in cells])
+                x1 = max([x1] + [item["x1"] for item in cells])
             bands.append({
                 "field": column.field,
                 "source": region.source,

@@ -79,6 +79,16 @@ export function getTransactions(taskId: number): Promise<TxnRow[]> {
   return request<TxnRow[]>('/tasks/' + taskId + '/transactions?limit=2000');
 }
 
+/** 取任务原件（PDF 原始字节）；报告里的「原始文件」就是它。 */
+export async function getTaskFile(taskId: number): Promise<Blob> {
+  const token = localStorage.getItem('bs_token');
+  const response = await fetch('/api/v1/tasks/' + taskId + '/file', {
+    headers: token ? { Authorization: 'Bearer ' + token } : {},
+  });
+  if (!response.ok) throw new Error('取不到原件（' + response.status + '）');
+  return await response.blob();
+}
+
 export type AuditRow = {
   id: number;
   actor_id: number | null;

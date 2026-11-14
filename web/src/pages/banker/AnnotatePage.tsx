@@ -1,27 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  inspectFile,
   inspectSample,
   listSamples,
   sampleFileUrl,
+  spreadFile,
   spreadKeyword,
   type InspectBand,
   type InspectPage,
   type LabSample,
 } from '../../api/lab';
-import { createTemplate, updateTemplate } from '../../api/banker';
+import { createTemplate, getTaskFile, listTasks, updateTemplate, type TaskSummary } from '../../api/banker';
 import { getErrorMessage } from '../../api/errors';
 import { Button } from '../../ui/Button';
 import { Notice } from '../../ui/Notice';
 
 /**
- * 标注画布。
+ * 标注画布：底版就是**原始 PDF 本身**（pdf.js 渲染原页），上面叠系统认出来的列带与单元格。
  *
- * 核心态度：模板**不记死坐标**，只声明「我需要哪些列」（卡号、交易日期、金额…）。
- * 系统在新文件上自己找：关键词定位 → 版面把同一列往下扩。这一页就是把那个过程摊开给人看。
- *
- * 所以画布上画的是「系统认出来的列带 + 每列往下捡到的单元格」，人只需要：
- * ① 认错字段名就改；② 列带偏了就拖；③ 漏了的列用关键词补一条。
+ * 三个来源：内置样本 / 本地上传 / 已有任务的原件。
+ * 模板只声明「我需要哪些列」，位置由版面分析现找；人可以改字段名、拖列带、按关键词补列。
  */
 const FIELDS = [
   'txn_date', 'trade_time', 'reference_no', 'summary', 'counterparty_name',
@@ -30,11 +29,15 @@ const FIELDS = [
 
 type Draft = { field: string; x0: number; x1: number; cells: InspectBand['cells']; source: string };
 type Drag = { index: number; mode: 'move' | 'left' | 'right'; startX: number; x0: number; x1: number };
+type Source =
+  | { kind: 'sample'; label: string; sample: string }
+  | { kind: 'file'; label: string; blob: Blob };
 
 export default function AnnotatePage() {
   const navigate = useNavigate();
   const [samples, setSamples] = useState<LabSample[]>([]);
-  const [sample, setSample] = useState('');
+  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [source, setSource] = useState<Source | null>(null);
   const [pages, setPages] = useState<InspectPage[]>([]);
   const [pageIndex, setPageIndex] = useState(0);
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -49,27 +52,52 @@ export default function AnnotatePage() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<Drag | null>(null);
   const renderTaskRef = useRef<{ cancel(): void } | null>(null);
-  const [scale, setScale] = useState(1);
+  const [fitScale, setFitScale] = useState(1);
+  // 默认放大一点：800×1000 pt 的流水页按宽度铺满后正文字号只有 7px 左右，看不清等于没底版
+  const [zoom, setZoom] = useState(1.35);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
 
   useEffect(() => {
     listSamples()
       .then((data) => {
         setSamples(data.items);
-        if (data.items.length) setSample(data.items[0].name);
+        if (data.items.length) setSource({ kind: 'sample', label: data.items[0].name, sample: data.items[0].name });
       })
       .catch((err) => setError(getErrorMessage(err, 'banker')));
+    listTasks({ limit: 20 })
+      .then((data) => setTasks(data.items))
+      .catch(() => setTasks([]));
   }, []);
 
-  const loadInspect = useCallback(async (name: string) => {
-    if (!name) return;
+  // 底版 URL：样本走 Lab 静态接口，上传/任务走 blob URL（用完必须 revoke）
+  useEffect(() => {
+    if (!source) {
+      setPdfUrl(null);
+      return;
+    }
+    if (source.kind === 'sample') {
+      setPdfUrl(sampleFileUrl(source.sample));
+      return;
+    }
+    const url = URL.createObjectURL(source.blob);
+    setPdfUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [source]);
+
+  const loadLayout = useCallback(async (current: Source) => {
     setBusy(true);
     setError('');
+    setMessage('');
     try {
-      const report = await inspectSample(name);
+      const report = current.kind === 'sample' ? await inspectSample(current.sample) : await inspectFile(current.blob);
       setPages(report.pages);
       setPageIndex(0);
       setDrafts(toDrafts(report.pages[0]));
       setSelected(null);
+      setMessage(
+        '已分析：' + report.page_count + ' 页，第 1 页认出 ' + (report.pages[0]?.bands.length ?? 0) + ' 条列带' +
+          (report.text_layer ? '' : '（这份文件没有文字层，需要走 OCR）'),
+      );
     } catch (err) {
       setError(getErrorMessage(err, 'banker'));
     } finally {
@@ -78,51 +106,46 @@ export default function AnnotatePage() {
   }, []);
 
   useEffect(() => {
-    void loadInspect(sample);
-  }, [sample, loadInspect]);
+    if (source) void loadLayout(source);
+  }, [source, loadLayout]);
 
   const page = pages[pageIndex];
+  const scale = fitScale * zoom;
 
-  // pdf.js 渲染：宽度撑满容器，缩放跟着容器走
+  // 渲染原始 PDF 页
   useEffect(() => {
-    if (!page || !sample) return;
+    if (!page || !pdfUrl) return;
     let cancelled = false;
     (async () => {
-      // pdf.js 有 300+KB，动态导入让银行侧主包不带它，只在打开画布时才拉
       const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
-      // worker 放在 public/ 下走同源静态路径：
-      // Vite 的 new Worker(new URL(...)) 在 dev 下会挂在 ?worker_file 上不返回（status 0），
-      // pdf.js 就一直等着，画布永远是白的。
       pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-      const doc = await pdfjs.getDocument({ url: sampleFileUrl(sample) }).promise;
+      const doc = await pdfjs.getDocument({ url: pdfUrl }).promise;
       const pdfPage = await doc.getPage(pageIndex + 1);
       const base = pdfPage.getViewport({ scale: 1 });
-      const containerWidth = stageRef.current?.clientWidth ?? 820;
-      const nextScale = Math.max(0.4, Math.min(2.2, containerWidth / base.width));
-      const viewport = pdfPage.getViewport({ scale: nextScale });
+      const containerWidth = stageRef.current?.clientWidth ?? 800;
+      const nextFit = Math.max(0.3, Math.min(3, (containerWidth - 24) / base.width));
+      const viewport = pdfPage.getViewport({ scale: nextFit * zoom });
       const canvas = canvasRef.current;
       if (!canvas || cancelled) return;
       canvas.width = Math.floor(viewport.width);
       canvas.height = Math.floor(viewport.height);
       const context = canvas.getContext('2d');
       if (!context) return;
-      // StrictMode 下 effect 会跑两次；pdf.js 不允许同一块 canvas 上并发渲染，
-      // 所以先取消上一次，再开始这一次。
       renderTaskRef.current?.cancel();
       const task = pdfPage.render({ canvasContext: context, viewport });
       renderTaskRef.current = task as unknown as { cancel(): void };
       await task.promise;
-      if (!cancelled) setScale(nextScale);
+      if (!cancelled) setFitScale(nextFit);
     })().catch((err: unknown) => {
       const text = err instanceof Error ? err.message : String(err);
-      if (text.includes('RenderingCancelledException') || text.includes('cancelled')) return;
-      setError('画布渲染失败：' + text);
+      if (text.includes('cancel')) return;
+      setError('PDF 渲染失败：' + text);
     });
     return () => {
       cancelled = true;
       renderTaskRef.current?.cancel();
     };
-  }, [page, pageIndex, sample]);
+  }, [page, pageIndex, pdfUrl, zoom]);
 
   const toPage = (clientX: number) => {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -157,15 +180,18 @@ export default function AnnotatePage() {
   }
 
   async function addByKeyword() {
-    if (!keyword.trim()) return;
+    if (!source || !keyword.trim()) return;
     setBusy(true);
     setError('');
     setMessage('');
     try {
-      const report = await spreadKeyword(sample, keyword.trim());
+      const report =
+        source.kind === 'sample'
+          ? await spreadKeyword(source.sample, keyword.trim())
+          : await spreadFile(source.blob, keyword.trim());
       const bands = report.bands.filter((band) => band.page === pageIndex);
       if (!bands.length) {
-        setMessage('这一页没找到「' + keyword + '」。可能是扫描件（无文字层），需要走 OCR。');
+        setMessage('这一页没找到「' + keyword + '」。扫描件（无文字层）要先走 OCR。');
         return;
       }
       const added = bands.map((band) => ({
@@ -176,7 +202,7 @@ export default function AnnotatePage() {
         source: 'keyword:' + keyword,
       }));
       setDrafts((prev) => dedupe([...prev, ...added]));
-      setMessage('按「' + keyword + '」扩散到 ' + added.length + ' 条列带，共 ' + added.reduce((n, b) => n + b.cells.length, 0) + ' 个单元格。');
+      setMessage('按「' + keyword + '」扩散到 ' + added.length + ' 条列带。');
     } catch (err) {
       setError(getErrorMessage(err, 'banker'));
     } finally {
@@ -190,9 +216,8 @@ export default function AnnotatePage() {
     setError('');
     setMessage('');
     try {
-      const width = page.width;
-      const height = page.height;
-      const headerY = page.header_y ?? page.height * 0.12;
+      const { width, height } = page;
+      const headerY = page.header_y ?? height * 0.12;
       const columns = drafts
         .filter((draft) => draft.field)
         .map((draft) => ({
@@ -238,48 +263,101 @@ export default function AnnotatePage() {
         <div>
           <h1>标注画布</h1>
           <p className="sub">
-            模板只声明需要哪些列；位置由系统按「关键词定位 + 版面往下扩散」现找。认错就改、偏了就拖、漏了就用关键词补。
+            底版是原始 PDF。模板只声明需要哪些列，位置由「关键词定位 + 版面往下扩散」现找；认错就改、偏了就拖、漏了就用关键词补。
           </p>
         </div>
         <div className="filters">
-          <select value={sample} onChange={(event) => setSample(event.target.value)}>
-            {samples.map((item) => (
-              <option key={item.name} value={item.name}>{item.name}</option>
-            ))}
-          </select>
-          <select value={bankCode} onChange={(event) => setBankCode(event.target.value.toUpperCase())}>
+          <select value={bankCode} onChange={(event) => setBankCode(event.target.value)}>
             {['UNKNOWN', 'ICBC', 'CCB', 'CMB', 'ABC', 'BOC'].map((code) => (
               <option key={code} value={code}>{code}</option>
             ))}
           </select>
-          <Button onClick={() => void save()} disabled={busy || !drafts.length}>
-            保存为模板
-          </Button>
+          <Button onClick={() => void save()} disabled={busy || !drafts.length}>保存为模板</Button>
         </div>
       </header>
+
+      <div className="source-bar">
+        <label className="source-item">
+          <span>打开原件</span>
+          <input
+            type="file"
+            accept=".pdf"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) setSource({ kind: 'file', label: file.name, blob: file });
+            }}
+          />
+        </label>
+
+        <label className="source-item">
+          <span>按任务原件</span>
+          <select
+            value={source?.kind === 'sample' ? '' : ''}
+            onChange={(event) => {
+              const id = Number(event.target.value);
+              if (!id) return;
+              setBusy(true);
+              getTaskFile(id)
+                .then((blob) => setSource({ kind: 'file', label: '任务 #' + id, blob }))
+                .catch((err) => setError(getErrorMessage(err, 'banker')))
+                .finally(() => setBusy(false));
+            }}
+          >
+            <option value="">选一个已受理任务…</option>
+            {tasks.map((task) => (
+              <option key={task.id} value={task.id}>#{task.id} {task.biz_no}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="source-item">
+          <span>或内置样本</span>
+          <select
+            value={source?.kind === 'sample' ? source.sample : ''}
+            onChange={(event) => {
+              const name = event.target.value;
+              if (name) setSource({ kind: 'sample', label: name, sample: name });
+            }}
+          >
+            <option value="">不使用样本</option>
+            {samples.map((item) => (
+              <option key={item.name} value={item.name}>{item.name}</option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       {error ? <Notice>{error}</Notice> : null}
       {message ? <Notice tone="ok">{message}</Notice> : null}
 
       <div className="annotate">
         <div className="annotate-stage" ref={stageRef} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-          {pages.length > 1 ? (
-            <div className="page-tabs">
-              {pages.map((item, index) => (
-                <button
-                  key={item.index}
-                  className={index === pageIndex ? 'active' : ''}
-                  onClick={() => {
-                    setPageIndex(index);
-                    setDrafts(toDrafts(item));
-                    setSelected(null);
-                  }}
-                >
-                  第 {index + 1} 页
-                </button>
-              ))}
-            </div>
-          ) : null}
+          <div className="stage-bar">
+            <span className="muted small">
+              {source ? '原件：' + source.label : '还没有打开原件'}
+              {page ? ' · 第 ' + (pageIndex + 1) + '/' + pages.length + ' 页 · ' + Math.round(page.width) + '×' + Math.round(page.height) + ' pt · ' + Math.round(scale * 100) + '%' : ''}
+            </span>
+            <span className="stage-tools">
+              {pages.length > 1
+                ? pages.map((item, index) => (
+                    <button
+                      key={item.index}
+                      className={index === pageIndex ? 'active' : ''}
+                      onClick={() => {
+                        setPageIndex(index);
+                        setDrafts(toDrafts(item));
+                        setSelected(null);
+                      }}
+                    >
+                      第 {index + 1} 页
+                    </button>
+                  ))
+                : null}
+              <button onClick={() => setZoom(Math.max(0.4, zoom - 0.25))}>−</button>
+              <button onClick={() => setZoom(Math.min(3, zoom + 0.25))}>+</button>
+              <button onClick={() => setZoom(1)}>适应宽度</button>
+            </span>
+          </div>
 
           <div className="canvas-wrap" style={{ width: canvasWidth || '100%', height: canvasHeight || 420 }}>
             <canvas ref={canvasRef} />
@@ -292,7 +370,13 @@ export default function AnnotatePage() {
                       left: draft.x0 * scale,
                       width: Math.max(6, (draft.x1 - draft.x0) * scale),
                       top: (page.header_y ?? 0) * scale,
-                      height: Math.max(12, page.height * scale - (page.header_y ?? 0) * scale - 8),
+                      // 列带只画到最后一个被捡到的单元格，画到页底会像是「这一列一直空着」
+                      height: Math.max(
+                        12,
+                        (draft.cells.length
+                          ? Math.max(...draft.cells.map((cell) => cell.y1)) - (page.header_y ?? 0)
+                          : page.height - (page.header_y ?? 0)) * scale,
+                      ),
                     }}
                     onPointerDown={(event) => onPointerDown(event, index, 'move')}
                     title={draft.field + ' · ' + draft.cells.length + ' 格'}
@@ -300,7 +384,7 @@ export default function AnnotatePage() {
                     <span className="band-label">{draft.field}</span>
                     <span className="handle left" onPointerDown={(event) => onPointerDown(event, index, 'left')} />
                     <span className="handle right" onPointerDown={(event) => onPointerDown(event, index, 'right')} />
-                    {draft.cells.slice(0, 400).map((cell, cellIndex) => (
+                    {draft.cells.slice(0, 600).map((cell, cellIndex) => (
                       <span
                         key={cellIndex}
                         className="cell"
@@ -330,19 +414,11 @@ export default function AnnotatePage() {
               const open = selected === index;
               return (
                 <div key={index} className={'band-item' + (open ? ' open' : '')}>
-                  {/* 一行一个字段：点它才在这一行下面展开设置，不共用一个设置框 */}
-                  <button
-                    className="band-head"
-                    onClick={() => setSelected(open ? null : index)}
-                    aria-expanded={open}
-                  >
+                  <button className="band-head" onClick={() => setSelected(open ? null : index)} aria-expanded={open}>
                     <span className="band-caret">{open ? '▾' : '▸'}</span>
                     <span className="band-name">{draft.field}</span>
-                    <span className="band-meta">
-                      {Math.round(draft.x0)}–{Math.round(draft.x1)} · {draft.cells.length} 格
-                    </span>
+                    <span className="band-meta">{Math.round(draft.x0)}–{Math.round(draft.x1)} · {draft.cells.length} 格</span>
                   </button>
-
                   {open ? (
                     <div className="band-body">
                       <label>
@@ -350,13 +426,9 @@ export default function AnnotatePage() {
                         <select
                           value={draft.field}
                           onChange={(event) =>
-                            setDrafts((prev) =>
-                              prev.map((item, i) => (i === index ? { ...item, field: event.target.value } : item)),
-                            )
+                            setDrafts((prev) => prev.map((item, i) => (i === index ? { ...item, field: event.target.value } : item)))
                           }
                         >
-                          {/* 系统认出来的字段名可能是 FIELDS 里没有的写法（如 counterparty），
-                              必须原样列出来，否则下拉会显示成第一个选项，一碰就悄悄改了字段 */}
                           {(FIELDS.includes(draft.field) ? FIELDS : [draft.field, ...FIELDS]).map((field) => (
                             <option key={field} value={field}>{field}</option>
                           ))}
@@ -369,18 +441,14 @@ export default function AnnotatePage() {
                             type="number"
                             value={Math.round(draft.x0)}
                             onChange={(event) =>
-                              setDrafts((prev) =>
-                                prev.map((item, i) => (i === index ? { ...item, x0: Number(event.target.value) } : item)),
-                              )
+                              setDrafts((prev) => prev.map((item, i) => (i === index ? { ...item, x0: Number(event.target.value) } : item)))
                             }
                           />
                           <input
                             type="number"
                             value={Math.round(draft.x1)}
                             onChange={(event) =>
-                              setDrafts((prev) =>
-                                prev.map((item, i) => (i === index ? { ...item, x1: Number(event.target.value) } : item)),
-                              )
+                              setDrafts((prev) => prev.map((item, i) => (i === index ? { ...item, x1: Number(event.target.value) } : item)))
                             }
                           />
                         </span>
@@ -403,8 +471,8 @@ export default function AnnotatePage() {
           </div>
 
           <p className="muted small">
-            没有文字层的扫描件会一条都扩不出来——那不是画布的问题，要走 OCR。保存的是列带（相对宽度），
-            所以同一家银行换一份文件、位置略有偏移也能用。
+            没有文字层的扫描件扩不出列带——那不是画布的问题，要走 OCR。保存的是列带（相对宽度），
+            同一家银行换一份文件、位置略有偏移也能用。
           </p>
         </aside>
       </div>
