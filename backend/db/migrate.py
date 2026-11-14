@@ -6,6 +6,9 @@ from sqlalchemy import inspect, text
 from . import session as db_session
 
 
+REQUIRED_FIELDS_DDL = "ALTER TABLE template ADD COLUMN required_fields JSON NULL"
+
+
 def ensure_columns() -> list[str]:
     """必须在 init_db() 之后调用：engine 是懒加载的。"""
     engine = db_session.engine
@@ -126,4 +129,14 @@ def ensure_columns() -> list[str]:
             if "deleted_at" not in tcols:
                 conn.execute(text("ALTER TABLE template ADD COLUMN deleted_at DATETIME NULL"))
                 done.append("template.deleted_at")
+    # 模板的必需列（rebuild：缺列要能明确报出来）
+    try:
+        tcols = {c["name"] for c in insp.get_columns("template")}
+        if tcols and "required_fields" not in tcols:
+            with engine.begin() as conn:
+                conn.execute(text(REQUIRED_FIELDS_DDL))
+            done.append("template.required_fields")
+    except Exception:  # noqa: BLE001 - 老库没有 template 表时跳过
+        pass
+
     return done

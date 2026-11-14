@@ -399,3 +399,13 @@ ul.plain { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--muted)
 .canvas-wrap canvas { box-shadow: 0 2px 12px rgba(15, 23, 42, .18); }
 /* 表格里被定位到的行（证据「看这笔」、标注列表选中） */
 table.grid tr.active-row { background: #fff7e6; box-shadow: inset 3px 0 0 #f59e0b; }
+/* 模板试跑 */
+.try-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 12px; }
+.try-row input[type=password] {
+  height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px;
+  font-family: inherit; font-size: 13px;
+}
+.try-result { display: grid; gap: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: #fbfdff; }
+.score-value.bad { color: #b91c1c; }
+.chip-on { background: #eef4ff; border-color: var(--brand); color: var(--brand); font-weight: 600; }
+.chip:disabled { opacity: .55; cursor: not-allowed; }

@@ -117,7 +117,9 @@ def run_task(task_id: int, password: str | None = None) -> dict:
                             "version": template_row.version,
                             "field_map": template_row.field_map,
                             # 有框画范围就带上：解析优先用它切列，比按表头词中心推算稳
-                            "layout": template_row.layout}
+                            "layout": template_row.layout,
+                            # 必需列：缺了要在报告里点名，而不是让指标一片「不可算」
+                            "required_fields": template_row.required_fields}
 
         transition(task, "CHECKING")
         transition(task, "PARSING")

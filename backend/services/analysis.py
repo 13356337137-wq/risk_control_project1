@@ -195,6 +195,17 @@ def run_analysis(
     # 模板自定义字段的汇总（有值笔数、合计、均值、样例），报告与看板都用它
     payload["custom_field_stats"] = _custom_field_stats(parsed.transactions or [])
 
+    # 模板缺列要说清楚：否则用户看到的是一堆「不可算」指标，不知道是版式没标全
+    from services.template_checks import missing_required  # noqa: PLC0415
+
+    missing = missing_required((template or {}).get("field_map"), (template or {}).get("required_fields"))
+    if missing:
+        payload.setdefault("limitations", [])
+        payload["limitations"].insert(
+            0,
+            "模板缺列：" + "、".join(missing) + "（这份版式模板未标注这些列，相关指标因此不可算）",
+        )
+
     # 解析覆盖率门禁：笔数远少于页脚声明时，报告必须自我说明并降级，避免「只读到 12 笔还给良好」
     footer_count = getattr(parsed, "footer_count", None)
     txn_total = len(parsed.transactions)

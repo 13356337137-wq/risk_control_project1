@@ -37,6 +37,7 @@ def list_templates(bank_code: str | None = None, include_deleted: bool = False,
     rows = db.execute(stmt).scalars().all()
     return [{"id": t.id, "bank_code": t.bank_code, "version": t.version,
              "status": t.status, "field_map": t.field_map, "header_columns": t.header_columns,
+             "required_fields": t.required_fields,
              "created_at": t.created_at.isoformat() if t.created_at else None,
              "updated_at": t.updated_at.isoformat() if t.updated_at else None} for t in rows]
 
@@ -360,6 +361,7 @@ def infer_template_api(
     return payload
 
 class TemplatePatch(BaseModel):
+    required_fields: list[str] | None = None
     bank_code: str | None = None
     field_map: dict | None = None
     header_columns: list | None = None
@@ -390,6 +392,7 @@ def update_template(template_id: int, payload: TemplatePatch, db: Session = Depe
         header_columns=payload.header_columns if payload.header_columns is not None else row.header_columns,
         sample_file_id=row.sample_file_id,
         layout=payload.layout if payload.layout is not None else row.layout,
+        required_fields=payload.required_fields if payload.required_fields is not None else row.required_fields,
         updated_at=_dt_now.utcnow(),
     )
     old_status = row.status
@@ -412,6 +415,7 @@ def get_template(template_id: int, db: Session = Depends(get_session)):
         "id": row.id, "bank_code": row.bank_code, "version": row.version,
         "status": row.status, "field_map": row.field_map or {},
         "header_columns": row.header_columns, "layout": row.layout,
+        "required_fields": row.required_fields,
         "sample_file_id": row.sample_file_id,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -553,10 +557,12 @@ def preview_template(template_id: int, file: UploadFile = File(...), password: s
     # 逐页统计：用户要看到「模板在第 2、3…页还好不好用」，只给总笔数看不出问题页
     from collections import Counter
 
-    per_page = Counter(t.page_no for t in parsed.transactions)
+    # 交易的 page_no 是 1 起的（与报告、流水列表一致），逐页统计必须对齐同一个口径，
+    # 否则会出现「总笔数 6、每页都是 0 笔」这种自相矛盾的试跑结果
+    per_page = Counter(t.page_no or 1 for t in parsed.transactions)
     header_by_page = {h.page_no: h for h in (parsed.headers or [])}
     pages = []
-    for pno in range(parsed.page_count or 0):
+    for pno in range(1, (parsed.page_count or 0) + 1):
         h = header_by_page.get(pno)
         # PageHeader 是「跨页可比对字段」（账号/户名/起止日期），不是列清单；
         # 有它说明这一页的页眉被识别到了，能用来判断「后续页是否还是同一账户同一期间」。
@@ -581,6 +587,25 @@ def preview_template(template_id: int, file: UploadFile = File(...), password: s
         }
         for t in parsed.transactions[:12]
     ]
+    # 缺列诊断：模板说「这份版式一定有这些列」，实际切列时却没切出来——
+    # 这种问题以前要等到指标一片空才发现，现在试跑时就说清楚。
+    from algorithm.ocr.parse import build_columns as _bc  # noqa: PLC0415
+
+    from services.template_checks import missing_required  # noqa: PLC0415
+
+    mapped = set((row.field_map or {}).keys())
+    present = set((row.required_fields or [])) & mapped
+    required = list(row.required_fields or [])
+    missing = missing_required(row.field_map, required)
+    # 再按实际解析结果核一遍：列在 field_map 里、但 12 笔里一个值都没有，也算没读出来
+    empty = []
+    for field in required:
+        if field in missing:
+            continue
+        if field in ("txn_date", "amount", "balance", "summary"):
+            if not any(getattr(t, field, None) not in (None, "") for t in parsed.transactions):
+                empty.append(field)
+
     return {
         "template_id": row.id,
         "txn_count": len(parsed.transactions),
@@ -588,6 +613,10 @@ def preview_template(template_id: int, file: UploadFile = File(...), password: s
         "pages": pages,
         "warnings": parsed.warnings[:8],
         "rows": rows,
+        "required_fields": required,
+        "missing_columns": missing,
+        "empty_columns": empty,
+        "present_columns": sorted(present),
     }
 
 

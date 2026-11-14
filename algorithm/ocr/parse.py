@@ -504,6 +504,28 @@ def _page_header(
     return header
 
 
+def _layout_areas_for(layout, page_no, total_pages=None):
+    """取该页的所有表格框（同一页可能有明细表 + 汇总表两块）。
+
+    返回列表；单块时与旧行为完全一致（列表长度 1）。
+    """
+    one = _layout_area_for(layout, page_no, total_pages)
+    if not one or not layout:
+        return [one] if one else []
+    tables = [t for t in (layout.get("tables") or []) if t.get("area")]
+    areas = []
+    for t in tables:
+        if int(t.get("page") or 0) == page_no:
+            areas.append(t["area"])
+    if not areas:
+        for t in tables:
+            resolved = _layout_area_for({"tables": [t], "page_size": layout.get("page_size")},
+                                        page_no, total_pages)
+            if resolved is one:
+                areas.append(t["area"])
+    return areas or [one]
+
+
 def _layout_area_for(layout, page_no, total_pages=None):
     """取该页的表格框。
 
@@ -553,27 +575,34 @@ def _crop_by_layout(words, layout, page_no, total_pages=None):
     实测反而比不用模板慢 30%。裁掉区域外的词才有真正收益。
     上方留 12%：表头通常画在表格区之外，裁掉就找不到表头了。
     """
-    area = _layout_area_for(layout, page_no, total_pages)
-    if not area:
+    areas = _layout_areas_for(layout, page_no, total_pages)
+    if not areas:
         return words
     size = (layout or {}).get("page_size") or {}
     W = float(size.get("w") or 0)
     H = float(size.get("h") or 0)
     if W <= 0 or H <= 0:
         return words
-    ax = float(area.get("x", 0))
-    ay = float(area.get("y", 0))
-    aw = float(area.get("w", 1))
-    ah = float(area.get("h", 1))
-    x0 = max(0.0, ax - 0.02) * W
-    x1 = min(1.0, ax + aw + 0.02) * W
-    y0 = max(0.0, ay - 0.12) * H
-    y1 = min(1.0, ay + ah + 0.03) * H
+
+    boxes = []
+    for area in areas:
+        ax = float(area.get("x", 0))
+        ay = float(area.get("y", 0))
+        aw = float(area.get("w", 1))
+        ah = float(area.get("h", 1))
+        boxes.append((
+            max(0.0, ax - 0.02) * W,
+            min(1.0, ax + aw + 0.02) * W,
+            max(0.0, ay - 0.12) * H,
+            min(1.0, ay + ah + 0.03) * H,
+        ))
+
     kept = []
     for w in words:
         cx = (w.x0 + w.x1) / 2
         cy = (w.top + w.bottom) / 2
-        if x0 <= cx <= x1 and y0 <= cy <= y1:
+        # 落在任意一块里就保留：同一页的明细表和汇总表都要能读
+        if any(x0 <= cx <= x1 and y0 <= cy <= y1 for x0, x1, y0, y1 in boxes):
             kept.append(w)
     return kept or words
 

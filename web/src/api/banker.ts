@@ -154,6 +154,7 @@ export type TemplateDetail = {
   status: string;
   field_map: Record<string, unknown>;
   layout: unknown | null;
+  required_fields?: string[] | null;
 };
 
 export function getTemplate(id: number): Promise<TemplateDetail> {
@@ -185,6 +186,40 @@ export type TemplateLayout = {
   field_map: Record<string, unknown> | null;
   header_columns: string[] | null;
 };
+
+export type TemplatePreview = {
+  template_id: number;
+  txn_count: number;
+  page_count: number;
+  pages: { page_no: number; rows: number; header_found: boolean; columns: number }[];
+  warnings: string[];
+  rows: {
+    txn_date: string | null;
+    summary: string | null;
+    direction: string | null;
+    amount: string | null;
+    balance: string | null;
+    page_no: number;
+  }[];
+  required_fields: string[];
+  missing_columns: string[];
+  empty_columns: string[];
+  present_columns: string[];
+};
+
+export function previewTemplate(id: number, file: Blob, password?: string): Promise<TemplatePreview> {
+  const form = new FormData();
+  form.append('file', file, 'sample.pdf');
+  if (password) form.append('password', password);
+  return request<TemplatePreview>('/templates/' + id + '/preview', { form, timeoutMs: 240000 });
+}
+
+export function updateTemplateRequired(id: number, required: string[]): Promise<{ id: number; version: number }> {
+  return request<{ id: number; version: number }>('/templates/' + id, {
+    method: 'PUT',
+    body: { required_fields: required },
+  });
+}
 
 export function getTemplateLayout(id: number): Promise<TemplateLayout> {
   return request<TemplateLayout>('/templates/' + id + '/layout');
