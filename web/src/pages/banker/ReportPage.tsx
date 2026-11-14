@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getReport, getTransactions, type ReportPayload, type TxnRow } from '../../api/banker';
 import { getErrorMessage } from '../../api/errors';
 import { Notice } from '../../ui/Notice';
+import { AmountHistogram, Bar, MonthlyFlow } from '../../components/ReportCharts';
 
 /**
  * 报告页：结论在最上，其余按「证据能撑住几层」的顺序排。
@@ -40,6 +41,7 @@ export default function ReportPage() {
   // 证据里的 txn_id 是「第几笔」（1 起），不是数据库 id —— 后端生成证据时用的是 range(1, n+1)
   const [highlightRow, setHighlightRow] = useState<number | null>(null);
   const highlightRef = useRef<HTMLTableRowElement | null>(null);
+  const [openMetric, setOpenMetric] = useState<string | null>(null);
   const PAGE = 100;
 
   useEffect(() => {
@@ -133,6 +135,66 @@ export default function ReportPage() {
 
       {tab === 'summary' ? (
         <>
+          <section>
+            <h2>仪表</h2>
+            <div className="gauge-row">
+              <div className="gauge-card">
+                <h3>总分</h3>
+                <span className="score-value">{report.scores?.overall ?? report.trust?.score ?? '—'}</span>
+                <span className="muted small">等级 {report.scores?.grade_label ?? report.trust?.label ?? '—'}</span>
+                {report.scores?.method ? <span className="muted small">{report.scores.method}</span> : null}
+              </div>
+              {report.trust?.layers?.map((layer) => (
+                <div key={layer.layer} className="gauge-card">
+                  <h3>
+                    {layer.label} <span className="muted small">{layer.status}</span>
+                  </h3>
+                  <span className="score-value small-value">{layer.score}</span>
+                  <Bar value={layer.score} tone={layer.status === 'unavailable' ? 'muted' : layer.score >= 80 ? 'brand' : layer.score >= 60 ? 'warn' : 'bad'} />
+                  <span className="muted small">权重 {Math.round((layer.weight ?? 0) * 100)}%</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {report.scores?.domains?.length ? (
+            <section>
+              <h2>分区得分</h2>
+              <table className="grid compact">
+                <thead><tr><th>业务域</th><th>得分</th><th>权重</th><th>指标覆盖</th><th>说明</th></tr></thead>
+                <tbody>
+                  {report.scores.domains.map((domain) => (
+                    <tr key={domain.key} className="domain-row">
+                      <td>
+                        {domain.name}
+                        <div className="muted small">{domain.desc}</div>
+                      </td>
+                      <td>
+                        <span className="bar-inline">
+                          <Bar value={domain.score} tone={domain.score >= 80 ? 'brand' : domain.score >= 60 ? 'warn' : 'bad'} />
+                          <span>{domain.score}</span>
+                        </span>
+                      </td>
+                      <td className="small muted">{Math.round(domain.weight * 100)}%</td>
+                      <td className="small muted">{domain.metric_valued}/{domain.metric_total}{domain.missing ? ' · 缺 ' + domain.missing : ''}</td>
+                      <td className="small muted">
+                        {domain.hits?.length ? '命中 ' + domain.hits.join('、') : domain.detail || '无扣分'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          ) : null}
+
+          {report.trend?.length ? (
+            <section>
+              <h2>月度收支</h2>
+              <MonthlyFlow series={report.trend} />
+              <p className="muted small">柱是当月收入与支出，虚线是净额。连续几个月入不敷出通常比单月大额更值得问。</p>
+            </section>
+          ) : null}
+
           {report.conclusions?.length ? (
             <section>
               <h2>结论依据</h2>
@@ -202,17 +264,39 @@ export default function ReportPage() {
                 {domain}（{items.filter((item) => item.value !== null).length}/{items.length} 有值）
               </h2>
               <table className="grid compact">
-                <thead><tr><th>代号</th><th>指标</th><th>值</th><th>单位</th><th>口径</th></tr></thead>
+                <thead><tr><th>代号</th><th>指标</th><th>值</th><th>单位</th><th /></tr></thead>
                 <tbody>
-                  {items.map((metric) => (
-                    <tr key={metric.code}>
-                      <td>{metric.code}</td>
-                      <td>{metric.name}</td>
-                      <td className={metric.value === null ? 'muted' : ''}>{metric.value ?? '不可算'}</td>
-                      <td className="small muted">{metric.unit}</td>
-                      <td className="small muted">{metric.note}</td>
-                    </tr>
-                  ))}
+                  {items.map((metric) => {
+                    const open = openMetric === metric.code;
+                    return (
+                      <Fragment key={metric.code}>
+                        <tr className="metric-row" onClick={() => setOpenMetric(open ? null : metric.code)}>
+                          <td>{metric.code}</td>
+                          <td>{metric.name}</td>
+                          <td className={metric.value === null ? 'muted' : ''}>{metric.value ?? '不可算'}</td>
+                          <td className="small muted">{metric.unit}</td>
+                          <td className="small muted">{open ? '收起' : '怎么看'}</td>
+                        </tr>
+                        {open ? (
+                          <tr className="metric-detail">
+                            <td colSpan={5}>
+                              <div className="metric-detail-box">
+                                <dl>
+                                  <dt>口径</dt>
+                                  <dd>{metric.note || '—'}</dd>
+                                  <dt>本次值</dt>
+                                  <dd>{metric.value === null ? '不可算（缺输入或本期无数据）' : metric.value + ' ' + metric.unit}</dd>
+                                  <dt>口径版本</dt>
+                                  <dd>{metric.caliber_version ?? '—'}（历史报告按当时版本解释）</dd>
+                                </dl>
+                                <Link className="link-btn" to="/bank/glossary">看这一项的标准口径说明</Link>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </section>
@@ -302,6 +386,13 @@ export default function ReportPage() {
               {txns === null ? '加载中…' : filteredTxns.length + ' 笔'}
             </span>
           </div>
+          {txns && txns.length ? (
+            <section>
+              <h3>金额分布</h3>
+              <AmountHistogram amounts={txns.filter((row) => row.amount).map((row) => Number(row.amount))} />
+            </section>
+          ) : null}
+
           <table className="grid compact">
             <thead>
               <tr><th>日期</th><th>方向</th><th>金额</th><th>余额</th><th>摘要</th><th>对方</th><th>页</th></tr>

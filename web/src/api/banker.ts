@@ -43,13 +43,38 @@ export type ReportPayload = {
   verdict_reason: string;
   carrier?: string;
   layers?: { layer: string; status: string; detail: string }[];
-  metrics?: { code: string; name: string; value: string | null; unit: string; note: string }[];
-  scores?: { overall?: number; grade_label?: string; partitions?: { key: string; label: string; score: number }[] };
+  metrics?: { code: string; name: string; value: string | null; unit: string; note: string; caliber_version?: number }[];
+  scores?: {
+    overall?: number;
+    grade?: string;
+    grade_label?: string;
+    method?: string;
+    domains?: {
+      key: string;
+      name: string;
+      desc: string;
+      score: number;
+      weight: number;
+      hits: string[];
+      detail?: string;
+      missing: number;
+      metric_total: number;
+      metric_valued: number;
+    }[];
+  };
+  trend?: { month: string; income: string; expense: string }[];
   limitations?: string[];
-  trust?: { score?: number; level?: string; label?: string; layers?: { layer: string; label: string; score: number; weight: number }[] };
+  trust?: {
+    score?: number;
+    level?: string;
+    label?: string;
+    note?: string;
+    layers?: { layer: string; label: string; score: number; weight: number; status: string; note?: string }[];
+  };
   metric_set_version?: number;
   threshold_version?: number;
   conclusions?: { code: string; message: string; level: string }[];
+  scores_detail?: unknown;
   evidence?: {
     rule_code?: string;
     page_no?: number;
@@ -60,7 +85,6 @@ export type ReportPayload = {
   materials?: { role: string; pages: number; sha256?: string | null; file_id?: number }[];
   self_check?: Record<string, unknown> | null;
   verification?: unknown;
-  trend?: unknown;
   custom_field_stats?: unknown;
   version?: number;
 };

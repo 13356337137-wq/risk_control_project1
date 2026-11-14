@@ -12,6 +12,7 @@ import OcrRoutingPage from './OcrRoutingPage';
 import TemplatesPage from './TemplatesPage';
 import TemplateDetailPage from './TemplateDetailPage';
 import TemplateLayoutPage from './TemplateLayoutPage';
+import GlossaryPage from './GlossaryPage';
 import MetricDefsPage from './MetricDefsPage';
 import VerificationDefsPage from './VerificationDefsPage';
 import ComingSoon from '../ComingSoon';
@@ -67,19 +68,16 @@ export default function BankerApp() {
           <div className="sider-group">
             <span className="sider-title">参数</span>
             <NavLink to="/bank/lab">特征 Lab</NavLink>
-            <NavLink to="/bank/metrics">指标口径</NavLink>
-            <NavLink to="/bank/verifications">校验口径</NavLink>
             <NavLink to="/bank/thresholds">风控参数</NavLink>
             <NavLink to="/bank/entities">客户与账户</NavLink>
             <NavLink to="/bank/ocr">OCR 路由</NavLink>
           </div>
-          {isAdmin ? (
-            <div className="sider-group">
-              <span className="sider-title">系统</span>
-              <NavLink to="/bank/audit">操作审计</NavLink>
-              <NavLink to="/bank/users">账号</NavLink>
-            </div>
-          ) : null}
+          <div className="sider-group">
+            <span className="sider-title">系统</span>
+            <NavLink to="/bank/glossary">口径说明</NavLink>
+            {isAdmin ? <NavLink to="/bank/audit">操作审计</NavLink> : null}
+            {isAdmin ? <NavLink to="/bank/users">账号</NavLink> : null}
+          </div>
         </nav>
 
         <main className="content">
@@ -95,6 +93,7 @@ export default function BankerApp() {
             <Route path="thresholds" element={<ThresholdsPage />} />
             <Route path="entities" element={<EntitiesPage />} />
             <Route path="ocr" element={<OcrRoutingPage />} />
+            <Route path="glossary" element={<GlossaryPage />} />
             <Route path="metrics" element={<MetricDefsPage />} />
             <Route path="verifications" element={<VerificationDefsPage />} />
             <Route path="audit" element={<AuditPage />} />
