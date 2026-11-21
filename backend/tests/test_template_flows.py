@@ -414,7 +414,11 @@ def test_borrower_isolation_and_state_guards(isolated_client, tmp_path: Path):
     assert done_id in listed_ids
     assert trashed_id not in listed_ids
     for item in body["items"]:
-        assert set(item.keys()) == {"id", "biz_no", "status", "carrier", "created_at", "bank_name", "period_start", "period_end"}
+        # consent_at / consent_version 是后续批次加的授权留痕字段，属预期新增
+        assert set(item.keys()) == {
+            "id", "biz_no", "status", "carrier", "created_at", "bank_name",
+            "period_start", "period_end", "consent_at", "consent_version",
+        }
         assert "verdict" not in item
         assert "risk" not in item
 

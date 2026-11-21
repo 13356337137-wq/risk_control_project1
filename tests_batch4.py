@@ -73,7 +73,8 @@ class TestBatch4(unittest.TestCase):
         self.assertIn('isAdmin ? <UsersPage /> : <Navigate to="/bank" replace />', banker_src)
 
         audit_src = (ROOT / "web/src/pages/banker/AuditPage.tsx").read_text(encoding="utf-8")
-        self.assertIn("listAudit({ limit: PAGE, offset })", audit_src)
+        # 审计页后来改成了服务端分页 + 动作筛选，断言跟着实际实现走
+        self.assertIn("listAudit({ page, size: PAGE, action:", audit_src)
 
         lab_src = (ROOT / "web/src/api/lab.ts").read_text(encoding="utf-8")
         self.assertIn("requestBlob('/lab/sample-file?sample='", lab_src)

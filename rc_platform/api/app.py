@@ -71,6 +71,13 @@ def _statement(name: str):
     return statement
 
 
+def _dated_ratio(statement) -> float:
+    rows = list(getattr(statement, "rows", []) or [])
+    if not rows:
+        return 0.0
+    return sum(1 for r in rows if getattr(r, "txn_date", None)) / len(rows)
+
+
 def _statement_from_bytes(data: bytes, name: str):
     registry = default_registry()
     plan = registry.plan("statement", overrides={"statement": "parse.layout_v2"})
@@ -81,7 +88,51 @@ def _statement_from_bytes(data: bytes, name: str):
     statement = result.get("statement")
     if statement is None:
         raise HTTPException(422, detail={"code": "E_PARSE", "message": "这份文件解析失败：" + "；".join(result.degradation)})
+
+    # layout_v2 对部分真实银行件只能切出行、抓不到日期列（实测建行 30 页件 txn_date 全空），
+    # 一旦没日期，所有时间类特征（夜间/月度/休眠/近 N 天）都算不出，Lab 里看着像坏的。
+    # 这类件改用主项目那套解析器兜底——它带模板与表头定位，日期列认得出来。
+    if data[:4] == b"%PDF" and _dated_ratio(statement) < 0.5:
+        recovered = _statement_from_legacy(data, statement)
+        if recovered is not None and _dated_ratio(recovered) > _dated_ratio(statement):
+            return recovered
     return statement
+
+
+def _statement_from_legacy(data: bytes, current):
+    """用主项目解析器再解析一遍，转成平台侧 Statement；失败返回 None。"""
+    from decimal import Decimal
+
+    from rc_platform.core.contracts import Statement, TxnRow
+
+    try:
+        from algorithm.ocr.parse import parse as parse_pdf  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        parsed = parse_pdf(data, None)
+    except Exception:  # noqa: BLE001
+        return None
+    txns = list(getattr(parsed, "transactions", []) or [])
+    if not txns:
+        return None
+    rows = []
+    for item in txns:
+        amount = getattr(item, "amount", None)
+        balance = getattr(item, "balance", None)
+        rows.append(
+            TxnRow(
+                txn_date=getattr(item, "txn_date", None),
+                trade_time=getattr(item, "trade_time", None),
+                reference_no=getattr(item, "reference_no", None),
+                summary=getattr(item, "summary", None),
+                counterparty_name=getattr(item, "counterparty_name", None),
+                direction=getattr(item, "direction", None),
+                amount=None if amount in (None, "") else Decimal(str(amount)),
+                balance=None if balance in (None, "") else Decimal(str(balance)),
+            )
+        )
+    return Statement(rows=rows)
 
 
 def _json_safe(value):
