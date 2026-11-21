@@ -41,6 +41,7 @@ import {
   type SingleBox,
   type TableRegionBox,
   type ToolMode,
+  BANK_OPTIONS,
 } from '../../components/annotate/types';
 import type { PageRenderSize } from '../../components/PdfPageCanvas';
 import { Button } from '../../ui/Button';
@@ -231,6 +232,14 @@ export function AnnotatePage() {
         });
         setPageIndex(0);
         applyInspectReport(report, keepLayout);
+        // 内置样本文件名里带银行代码（clean/ccb.pdf）：没选银行时直接带出来，
+        // 否则用户停在「请先选择银行」这一步，保存按钮点了没反应，看起来就是「存不了模板」。
+        setBankCode((prev) => {
+          if (prev) return prev;
+          const base = (sampleName.split('/').pop() || '').toLowerCase().replace(/\.[a-z]+$/, '');
+          const hit = BANK_OPTIONS.find((item) => item.code.toLowerCase() === base);
+          return hit ? hit.code : prev;
+        });
         setNotice(`已载入内置样本：${sampleName.split('/').pop()}（${report.ocr_used ? 'OCR 识字' : '文本层'}）`);
       } catch (e) {
         setError((e as Error).message || '载入内置样本失败');
@@ -720,6 +729,15 @@ export function AnnotatePage() {
             {editingTaskId && (
               <Button size="sm" variant="ghost" onClick={() => navigate(`/bank/tasks/${editingTaskId}`)}>
                 返回任务 #{editingTaskId} 报告
+              </Button>
+            )}
+            {/* 保存按钮放在顶栏：右栏是可滚动的，保存区常常被推到屏幕外，用户找不到就无法落库 */}
+            <Button size="sm" variant="secondary" onClick={() => handleSaveTemplate(false)} disabled={busy || columns.length === 0}>
+              仅存草稿
+            </Button>
+            {isAdmin && (
+              <Button size="sm" onClick={() => handleSaveTemplate(true)} disabled={busy || columns.length === 0}>
+                保存并启用
               </Button>
             )}
             <Button size="sm" variant="ghost" onClick={() => navigate('/bank/templates')}>

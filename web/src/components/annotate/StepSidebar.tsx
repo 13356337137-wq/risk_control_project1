@@ -487,6 +487,22 @@ export function StepSidebar({
               仅用于任务 #{editingTaskId} 重解析
             </Button>
           )}
+          <label className="ann-field" style={{ display: 'block' }}>
+            <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>这份流水属于哪家银行（必填，保存时写入模板）</span>
+            <select
+              className="ann-input"
+              style={{ width: '100%', marginTop: 4 }}
+              value={BANK_OPTIONS.some((b) => b.code === bankCode) ? bankCode : ''}
+              onChange={(e) => onBankCodeChange(e.target.value)}
+            >
+              <option value="">请选择银行</option>
+              {BANK_OPTIONS.map((item) => (
+                <option key={item.code} value={item.code}>
+                  {item.label}（{item.code}）
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="ann-save-pair">
             <Button
               variant={isAdmin ? 'primary' : 'secondary'}

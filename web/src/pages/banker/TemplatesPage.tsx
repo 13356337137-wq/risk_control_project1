@@ -50,6 +50,14 @@ export default function TemplatesPage() {
 
   const banks = Array.from(new Set(rows.map((r) => r.bank_code))).sort();
 
+  // 各栏计数：空表时用来说明「模板去哪了」，不然用户会以为模板丢了
+  const counts = {
+    active: rows.filter((r) => !r.deleted_at && r.status === 'enabled').length,
+    draft: rows.filter((r) => !r.deleted_at && r.status === 'draft').length,
+    disabled: rows.filter((r) => !r.deleted_at && r.status === 'disabled').length,
+    trash: rows.filter((r) => Boolean(r.deleted_at)).length,
+  };
+
   const shown = rows.filter((row) => {
     if (tab === 'trash') {
       if (!row.deleted_at) return false;
@@ -264,7 +272,30 @@ export default function TemplatesPage() {
           ))}
         </tbody>
       </table>
-      {shown.length === 0 ? <p className="muted">当前筛选下没有模板。</p> : null}
+      {shown.length === 0 ? (
+        <div className="empty-guide">
+          <p className="muted">
+            {counts.active || counts.draft || counts.disabled
+              ? '这一栏没有模板，但库里有 ' +
+                [
+                  counts.active ? counts.active + ' 份在用' : '',
+                  counts.draft ? counts.draft + ' 份草稿' : '',
+                  counts.disabled ? counts.disabled + ' 份已停用' : '',
+                  counts.trash ? counts.trash + ' 份在回收站' : '',
+                ].filter(Boolean).join('、') + '。'
+              : '库里还没有任何模板。'}
+          </p>
+          <div className="empty-actions">
+            {counts.draft ? <button className="btn btn-ghost" onClick={() => setTab('draft')}>去看草稿（{counts.draft}）</button> : null}
+            {counts.disabled ? <button className="btn btn-ghost" onClick={() => setTab('disabled')}>去看已停用（{counts.disabled}）</button> : null}
+            <button className="btn" onClick={() => navigate('/bank/annotate')}>标注一份新模板</button>
+            <button className="btn btn-ghost" onClick={() => setImportOpen(true)}>导入 JSON</button>
+          </div>
+          <p className="muted small">
+            模板只有「在用」才会被解析采用：新标注保存后是草稿，点「启用」才生效。
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

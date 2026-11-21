@@ -220,57 +220,56 @@ def create_task(
             db.commit()
             raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": "口令不正确，请重新输入"})
 
+    # ---- 选模板：同银行的启用模板里，按表头指纹/Jaccard 挑最匹配的一版 ----
+    # 只看「该银行第一个启用模板」会在同银行有多个版式时互抢：新版式被老模板套上，
+    # 读出来是错的还看不出来。这里统一走 template_match（T9 的匹配器）。
+    from db.models import Template  # noqa: PLC0415
+    from services.template_match import doc_headers_from_pdf, select_template  # noqa: PLC0415
+
+    doc_headers = doc_headers_from_pdf(data)
     template = None
     template_row = None
-    if bank_code:
-        from db.models import Template
+    matched_template = None
+    match_score: float | None = None
+    match_reason: str | None = None
 
-        row = db.execute(
+    def _try_bank(code: str | None, by: str) -> bool:
+        """按银行代码挑模板；挑中就写回现场变量并返回 True。"""
+        nonlocal template, template_row, matched_template, match_score, match_reason
+        if not code:
+            return False
+        rows = db.execute(
             select(Template).where(
-                Template.bank_code == bank_code.upper(),
+                Template.bank_code == code.upper(),
                 Template.status == "enabled",
                 Template.deleted_at.is_(None),
             )
-        ).scalars().first()
-        if row:
-            template_row = row
-            template = {"bank_code": row.bank_code, "version": row.version, "field_map": row.field_map}
+        ).scalars().all()
+        row, score, reason = select_template(list(rows), doc_headers)
+        match_score, match_reason = score, reason
+        if row is None:
+            return False
+        template_row = row
+        template = {"bank_code": row.bank_code, "version": row.version, "field_map": row.field_map}
+        matched_template = {"id": row.id, "bank_code": row.bank_code, "version": row.version,
+                            "by": reason, "score": score}
+        return True
+
+    if bank_code:
+        _try_bank(bank_code, "explicit_bank_code")
 
     # 预读取：不看模板，先判断「是不是流水」，并抓基础信息
     preread = run_preread(data, password=password)
     threshold_config = threshold_service.build_config(db)
-    matched_template = None
-    if template is None and preread.bank_code:
-        from db.models import Template
-
-        row = db.execute(
-            select(Template).where(
-                Template.bank_code == preread.bank_code.upper(),
-                Template.status == "enabled",
-                Template.deleted_at.is_(None),
-            )
-        ).scalars().first()
-        if row is not None:
-            template_row = row
-            template = {"bank_code": row.bank_code, "version": row.version, "field_map": row.field_map}
-            matched_template = {"id": row.id, "bank_code": row.bank_code, "by": "preread_bank_name"}
+    if template_row is None and preread.bank_code:
+        _try_bank(preread.bank_code, "preread_bank_name")
     # 正文里没有银行名时（很多导出件银行名只在文件名），用文件名兜底
     if template_row is None:
-        from algorithm.algo.preread import bank_from_filename
-        from db.models import Template
+        from algorithm.algo.preread import bank_from_filename  # noqa: PLC0415
 
         alias, code = bank_from_filename(file.filename or "")
         if code:
-            row = db.execute(
-                select(Template).where(
-                    Template.bank_code == code, Template.status == "enabled",
-                    Template.deleted_at.is_(None))
-            ).scalars().first()
-            if row is not None:
-                template_row = row
-                template = {"bank_code": row.bank_code, "version": row.version, "field_map": row.field_map}
-                matched_template = {"id": row.id, "bank_code": row.bank_code, "by": "filename_bank_name"}
-            elif preread is not None and not preread.bank_code:
+            if not _try_bank(code, "filename_bank_name") and preread is not None and not preread.bank_code:
                 preread.bank_code = code
                 preread.bank_name = alias
     if preread.verdict == "reject":
@@ -316,10 +315,13 @@ def create_task(
             "matched_template": matched_template,
             "template_match": {
                 "template_id": template_row.id if template_row else None,
-                "by": ("preread_bank_name" if matched_template else ("explicit_bank_code" if template_row else None)),
+                "by": (matched_template or {}).get("by") or ("explicit_bank_code" if template_row else None),
+                "score": match_score,
                 "reason": None if template_row else (
                     "未识别到银行" if not (preread and preread.bank_code)
-                    else ("银行 " + str(preread.bank_code) + " 没有启用的模板")),
+                    else ("银行 " + str(preread.bank_code) + " 没有启用的模板"
+                          + ("（同银行有模板但表头不匹配）" if match_reason == "jaccard_below_threshold" else ""))),
+                "doc_headers": doc_headers[:12],
             },
             "preread": preread.to_dict(),
         },
