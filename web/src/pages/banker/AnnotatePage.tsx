@@ -104,7 +104,8 @@ export function AnnotatePage() {
   const [pageCount, setPageCount] = useState(1);
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState<{ w: number; h: number }>({ w: 595, h: 842 });
-  const [zoom, setZoom] = useState(1.1);
+  // 默认 1.6：800pt 的流水页在 1.1 倍下正文只有 8px 高，框线会把字盖住，看着像「框和字对不上」
+  const [zoom, setZoom] = useState(1.6);
   const [tool, setTool] = useState<ToolMode>('select');
   const [showBoxes, setShowBoxes] = useState(true);
   const [focusWork, setFocusWork] = useState(false);

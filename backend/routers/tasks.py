@@ -670,7 +670,6 @@ def reanalyze_task(
         raise HTTPException(400, detail={"code": "E_STATE", "message": "原文件已被清理，无法重算"})
     data = path.read_bytes()
 
-    template = None
     from db.models import Template
     chosen_id = template_id if template_id is not None else task.template_id
     if chosen_id:
@@ -679,12 +678,13 @@ def reanalyze_task(
             if template_id is not None:
                 raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "指定模板不存在或已删除"})
         else:
-            template = {"bank_code": row.bank_code, "version": row.version, "field_map": row.field_map}
             task.template_id = row.id
             task.template_version = row.version
 
     if task.status in ("QUEUED", "CHECKING", "PARSING", "VERIFYING", "REPORTING"):
         raise HTTPException(409, detail={"code": "E_STATE", "message": "任务正在处理中，请稍后再试"})
+    # 普通重跑 / 换正式模板重跑必须清空一次性临时模板覆盖，避免被历史临时标注劫持
+    task.field_map_override = None
     transition(task, "QUEUED")
     db.add(AuditLog(action="reanalyze_queued", object_type="task", object_id=task_id,
                    detail=f"template={task.template_id}"))

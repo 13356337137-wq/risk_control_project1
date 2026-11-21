@@ -332,7 +332,12 @@ export function StepSidebar({
                       value={col.field}
                       onChange={(e) => onUpdateColumn(col.id, { field: e.target.value })}
                     >
-                      {fieldOptions.map((opt) => (
+                      {/* 当前字段不在候选表里时也要原样列出：否则 select 会显示成第一项，
+                          看着像「对方户名」被改成了「交易日期」 */}
+                      {(fieldOptions.some((opt) => opt.key === col.field)
+                        ? fieldOptions
+                        : [{ key: col.field, label: fieldLabel(col.field, customFields) }, ...fieldOptions]
+                      ).map((opt) => (
                         <option key={opt.key} value={opt.key}>
                           {opt.label}
                         </option>

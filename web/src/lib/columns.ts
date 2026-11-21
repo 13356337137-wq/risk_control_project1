@@ -22,6 +22,11 @@ const ALIASES: Record<string, string> = {
   amount_out_total: 'amount_out',
 };
 
+/** 把解析侧使用的字段名归一化到界面上的规范名（模板里可能存 counterparty/date/time）。 */
+export function canonicalField(key: string): string {
+  return ALIASES[key] ?? key;
+}
+
 export function labelOf(key: string): string {
   const canonical = ALIASES[key] ?? key;
   return COLUMN_LABELS.find((item) => item.key === canonical)?.label ?? key;

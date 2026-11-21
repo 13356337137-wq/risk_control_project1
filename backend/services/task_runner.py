@@ -102,11 +102,23 @@ def run_task(task_id: int, password: str | None = None) -> dict:
                     temp_template = True
                 elif isinstance(override_obj, list):
                     from services.analysis import infer_from_marks
+                    from services import template_layout as tlayout
 
                     inferred = infer_from_marks(data, override_obj, bank_code=bank_hint)
                     if inferred.get("valid") and inferred.get("field_map"):
-                        template = {"bank_code": bank_hint,
-                                    "version": 0, "field_map": inferred["field_map"]}
+                        built_layout = None
+                        try:
+                            built_layout = tlayout.build_layout(
+                                data, override_obj, inferred.get("columns") or [], inferred["field_map"]
+                            )
+                        except Exception:  # noqa: BLE001
+                            built_layout = None
+                        template = {
+                            "bank_code": bank_hint,
+                            "version": 0,
+                            "field_map": inferred["field_map"],
+                            "layout": built_layout,
+                        }
                         temp_template = True
                     else:
                         task.check_result = dict(task.check_result or {})
@@ -220,6 +232,15 @@ def run_task(task_id: int, password: str | None = None) -> dict:
             # 快通道出结果。慢通道（另一个引擎）会在系统空闲时复核，见 docs/快慢双通道解析设计.md
             verification={"status": "pending"},
         ))
+        # 临时模板用完即弃：消费完成后清空 field_map_override，防止劫持后续正式模板重跑
+        if getattr(task, "field_map_override", None):
+            check_copy = dict(task.check_result or {})
+            reparse_info = dict(check_copy.get("reparse") or {})
+            reparse_info["temp_template_used"] = temp_template
+            reparse_info["consumed"] = True
+            check_copy["reparse"] = reparse_info
+            task.check_result = check_copy
+            task.field_map_override = None
         transition(task, "DONE")
         session.add(AuditLog(action="analyze_done", object_type="task", object_id=task.id,
                              detail=f"txn={result['txn_count']}"))

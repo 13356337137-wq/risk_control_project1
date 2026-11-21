@@ -557,11 +557,15 @@ table.grid tr.active-row { background: #fff7e6; box-shadow: inset 3px 0 0 #f59e0
 .pdf-stage-wrap {
   position: relative; width: 100%; overflow: auto;
   background: #edf1f7; border: 1px solid var(--line); border-radius: 10px; padding: 16px;
-  display: flex; justify-content: center; align-items: flex-start; min-height: 520px;
+  /* 不能用 flex 居中：内容比容器宽时溢出部分跑到左侧且滚不回去，
+     看起来就是「原件左边被切掉、框和字对不上」 */
+  display: block; min-height: 520px;
 }
 .pdf-stage-empty { color: var(--muted); padding: 80px 20px; font-size: 14px; }
-.pdf-stage-surface { position: relative; box-shadow: 0 4px 18px rgba(15, 23, 42, .14); background: #fff; flex: 0 0 auto; }
-.pdf-stage-canvas, .pdf-stage-img { display: block; }
+.pdf-stage-surface { position: relative; box-shadow: 0 4px 18px rgba(15, 23, 42, .14); background: #fff; margin: 0 auto; }
+/* 画布 CSS 尺寸强制与 surface 一致：canvas 后备缓冲区按 dpr 放大过，
+   一旦 CSS 尺寸与 surface 差一两个像素，叠加层的百分比定位就整体偏移 */
+.pdf-stage-canvas, .pdf-stage-img { display: block; width: 100% !important; height: 100% !important; }
 .pdf-stage-overlay { position: absolute; inset: 0; }
 
 /* ---- 模板画布标注工作台 ---- */

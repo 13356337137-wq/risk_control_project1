@@ -400,6 +400,18 @@ export function CanvasStage({
                 const isSel = selected?.kind === 'col' && selected.id === col.id;
                 const dimmed = selected && selected.id !== col.id;
                 const label = fieldLabel(col.field, customFields);
+                // 列带从表头基准线下方起算（避免遮挡表头行），并保证至少 3% 最小可视宽度
+                const areaBottom = reg.area.y + reg.area.h;
+                const colTop = reg.headerY > reg.area.y && reg.headerY < areaBottom - 0.01 ? reg.headerY : reg.area.y;
+                const colHeight = Math.max(0.02, areaBottom - colTop);
+                // 显示宽度按「实际读到的格子」包络：模板/预读给的宽度常常只覆盖表头词
+                // （「交易时间」4 个字），而值是「2026-10-01」更长——不扩就会看着框偏左。
+                // 只影响显示，保存的仍是 col.x / col.w。
+                const cellsX = (col.cellNorms ?? []).flatMap((c) => [c.x0, c.x1]);
+                const boxLeft = cellsX.length ? Math.min(col.x, ...cellsX) : col.x;
+                const boxRight = cellsX.length ? Math.max(col.x + col.w, ...cellsX) : col.x + col.w;
+                const displayX = Math.max(0, boxLeft);
+                const displayW = Math.min(1 - displayX, Math.max(boxRight - displayX, 0.03));
 
                 return (
                   <div key={col.id}>
@@ -420,10 +432,12 @@ export function CanvasStage({
                     <div
                       className={`ann-col-box ${isSel ? 'selected' : ''} ${dimmed ? 'dim' : ''}`}
                       style={{
-                        left: `${col.x * 100}%`,
-                        top: `${reg.area.y * 100}%`,
-                        width: `${col.w * 100}%`,
-                        height: `${reg.area.h * 100}%`,
+                        // 框向外扩 2px：边框直接压在被框的字上时，首尾字符会被盖掉半个，
+                        // 看起来像「框圈歪了」。外扩之后框住的范围不变，但不再遮挡内容。
+                        left: `calc(${displayX * 100}% - 2px)`,
+                        top: `calc(${colTop * 100}% - 2px)`,
+                        width: `calc(${displayW * 100}% + 4px)`,
+                        height: `calc(${colHeight * 100}% + 4px)`,
                         borderColor: color,
                         backgroundColor: isSel ? `${color}22` : `${color}12`,
                       }}
@@ -497,10 +511,11 @@ export function CanvasStage({
                     key={s.id}
                     className={`ann-single-box ${isSel ? 'selected' : ''} ${dimmed ? 'dim' : ''}`}
                     style={{
-                      left: `${s.x * 100}%`,
-                      top: `${s.y * 100}%`,
-                      width: `${s.w * 100}%`,
-                      height: `${s.h * 100}%`,
+                      // 同列带：外扩 2px，避免边框压住卡号首尾字符
+                      left: `calc(${s.x * 100}% - 2px)`,
+                      top: `calc(${s.y * 100}% - 2px)`,
+                      width: `calc(${s.w * 100}% + 4px)`,
+                      height: `calc(${s.h * 100}% + 4px)`,
                     }}
                     onPointerDown={(e) => {
                       if (tool !== 'select') return;

@@ -44,7 +44,8 @@ def list_templates(bank_code: str | None = None, include_deleted: bool = False,
              "has_layout": bool(t.layout and (t.layout.get("tables") or t.layout.get("boxes"))),
              "has_sample": t.sample_file_id is not None,
              "created_at": t.created_at.isoformat() if t.created_at else None,
-             "updated_at": t.updated_at.isoformat() if t.updated_at else None} for t in rows]
+             "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+             "deleted_at": t.deleted_at.isoformat() if t.deleted_at else None} for t in rows]
 
 
 @router.post("")
@@ -109,30 +110,68 @@ _META_PATTERNS = [
 ]
 
 
-def _extract_meta(page_text: str, words: list[dict], page_w: float, page_h: float) -> dict:
-    """从首页文本里抽账号/户名/期间/币种，并给出命中文字的位置（归一化）。"""
+def _extract_meta(page_text: str, words: list[dict], page_w: float, page_h: float,
+                  header_y: float | None = None) -> dict:
+    """从首页页眉文本里抽账号/户名/期间/币种，并合并同行命中词的完整外接框（归一化）。
+
+    当提供 header_y（表头行上沿 pt）时，仅在表头上方页眉区检索，避免误框到表格首行数据（如币种列）。
+    """
     import re as _re
 
+    # 按 y 聚类成行，且优先限制在表头上方页眉区
+    header_words = [
+        w for w in words
+        if w.get("text") and (header_y is None or w["bottom"] <= header_y + 4.0)
+    ]
+    lines: list[list[dict]] = []
+    for w in sorted(header_words, key=lambda item: ((item["top"] + item["bottom"]) / 2, item["x0"])):
+        cy = (w["top"] + w["bottom"]) / 2
+        if lines:
+            prev_cy = sum((p["top"] + p["bottom"]) / 2 for p in lines[-1]) / len(lines[-1])
+            if abs(cy - prev_cy) <= 4.5:
+                lines[-1].append(w)
+                continue
+        lines.append([w])
+    for line in lines:
+        line.sort(key=lambda item: item["x0"])
+
+    header_text = "\n".join(" ".join(w["text"] for w in line) for line in lines) if lines else page_text
+    flat = _re.sub(r"[ \t]+", " ", header_text)
+
     out: dict[str, dict] = {}
-    flat = _re.sub(r"[ \t]+", " ", page_text)
     for field, pattern in _META_PATTERNS:
         m = _re.search(pattern, flat)
         if not m:
             continue
         value = m.group(1) if field != "period" else f"{m.group(1)} ~ {m.group(2)}"
-        key = m.group(0)[:24]
-        spot = None
-        for w in words:
-            if w["text"] and (w["text"][:6] in key or key[:6] in w["text"]):
-                spot = w
+        matched_words: list[dict] = []
+        for line in lines:
+            line_str = " ".join(w["text"] for w in line)
+            lm = _re.search(pattern, line_str)
+            if not lm:
+                continue
+            # 把正则在 line_str 中的字符区间映射回对应的所有词，合并其外接框
+            span_start, span_end = lm.span()
+            cursor = 0
+            for w in line:
+                w_start = cursor
+                w_end = cursor + len(w["text"])
+                if w_end > span_start and w_start < span_end:
+                    matched_words.append(w)
+                cursor = w_end + 1
+            if matched_words:
                 break
         rect = None
-        if spot and page_w and page_h:
+        if matched_words and page_w and page_h:
+            x0 = min(w["x0"] for w in matched_words)
+            y0 = min(w["top"] for w in matched_words)
+            x1 = max(w["x1"] for w in matched_words)
+            y1 = max(w["bottom"] for w in matched_words)
             rect = {
-                "x": round(spot["x0"] / page_w, 4),
-                "y": round(spot["top"] / page_h, 4),
-                "w": round(max(0.02, (spot["x1"] - spot["x0"]) / page_w), 4),
-                "h": round(max(0.015, (spot["bottom"] - spot["top"]) / page_h), 4),
+                "x": round(max(0.0, x0 / page_w), 4),
+                "y": round(max(0.0, y0 / page_h), 4),
+                "w": round(min(1.0 - max(0.0, x0 / page_w), max(0.02, (x1 - x0) / page_w)), 4),
+                "h": round(min(1.0 - max(0.0, y0 / page_h), max(0.015, (y1 - y0) / page_h)), 4),
             }
         out[field] = {"value": value.strip(), "rect": rect}
     return out
@@ -240,26 +279,43 @@ def probe_template(file: UploadFile = File(...), password: str | None = Form(Non
                 "top": round(w["top"], 1), "bottom": round(w["bottom"], 1)} for w in header]
 
     # 列边界：相邻表头词之间如果留有空隙（>6pt），取空隙中点作分界；
-    # 没有空隙说明表头被拆成多个词（如「收入 支出 金额」），按两词中心均值切。
+    # 没有空隙说明表头紧挨，按两词中心均值切。
     boundaries = []
     for left, right in zip(header, header[1:]):
         gap = right["x0"] - left["x1"]
-        mid = (left["x1"] + right["x0"]) / 2 if gap > 6 else (left["x1"] + right["x0"]) / 2
+        mid = (
+            (left["x1"] + right["x0"]) / 2
+            if gap > 6
+            else ((left["x0"] + left["x1"]) / 2 + (right["x0"] + right["x1"]) / 2) / 2
+        )
         boundaries.append({"after": left["text"], "before": right["text"],
                            "gap": round(gap, 1), "x": round(mid, 1)})
 
+    pw = page_size["width"] or 1.0
     suggestions: list[dict] = []
     used: set[str] = set()
-    for w in header:
+    for idx, w in enumerate(header):
         field = FIELD_BY_HEADER.get(w["text"].strip())
         if not field or field in used:
             continue
         used.add(field)
-        suggestions.append({"field": field, "column": w["text"],
-                            "x": round((w["x0"] + w["x1"]) / 2, 1),
-                            "y": round((w["top"] + w["bottom"]) / 2, 1)})
+        word_w = max(w["x1"] - w["x0"], 12.0)
+        col_x0 = boundaries[idx - 1]["x"] if idx > 0 else max(0.0, w["x0"] - 0.2 * word_w)
+        col_x1 = boundaries[idx]["x"] if idx < len(boundaries) else min(pw, w["x1"] + 0.5 * word_w)
+        if col_x1 <= col_x0:
+            col_x0, col_x1 = w["x0"], max(w["x1"], w["x0"] + 12.0)
+        col_x_norm = round(max(0.0, col_x0 / pw), 4)
+        col_w_norm = round(min(1.0 - col_x_norm, max(0.02, (col_x1 - col_x0) / pw)), 4)
+        suggestions.append({
+            "field": field, "column": w["text"],
+            "x": round((w["x0"] + w["x1"]) / 2, 1),
+            "y": round((w["top"] + w["bottom"]) / 2, 1),
+            "x0": round(col_x0, 1), "x1": round(col_x1, 1),
+            "col_x": col_x_norm, "col_w": col_w_norm,
+        })
 
-    meta = _extract_meta(full_text, words, page_size["width"], page_size["height"])
+    header_top_pt = min((h["top"] for h in headers), default=None)
+    meta = _extract_meta(full_text, words, page_size["width"], page_size["height"], header_y=header_top_pt)
 
     # 表格区：表头行上沿再往上留 2pt，到页面底部留 2% —— 由系统给出，不让用户画
     table_area = None

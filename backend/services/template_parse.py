@@ -29,10 +29,15 @@ def build_template(*, bank_code: str, version: int, field_map: dict | None,
         for box in raw_boxes
     ]
 
+    normalized_field_map: dict = {}
+    for k, v in (field_map or {}).items():
+        nk = "counterparty" if k == "counterparty_name" else k
+        normalized_field_map[nk] = v
+
     return ParseTemplate(
         bank_code=str(bank_code or "UNKNOWN"),
         version=int(version or 1),
-        field_map=dict(field_map or {}),
+        field_map=normalized_field_map,
         layout=layout or None,
         meta_boxes=meta_boxes,
         page_size=page_size,

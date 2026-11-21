@@ -145,7 +145,7 @@ def _row_from_cells(cells: dict[str, list[Word]], page_no: int, row_no: int) -> 
         direction = "in" if balance > 0 else direction
 
     summary = _text(cells.get("summary", [])) or None
-    counterparty = _text(cells.get("counterparty", [])) or None
+    counterparty = _text(cells.get("counterparty") or cells.get("counterparty_name") or []) or None
     reference_no = _text(cells.get("reference_no", [])) or None
 
     if txn_date is None and amount is None:
@@ -155,7 +155,7 @@ def _row_from_cells(cells: dict[str, list[Word]], page_no: int, row_no: int) -> 
 
     extra = {}
     known = {"txn_date", "amount", "amount_in", "amount_out", "balance",
-             "summary", "counterparty", "direction", "reference_no"}
+             "summary", "counterparty", "counterparty_name", "direction", "reference_no"}
     for field, tokens in cells.items():
         if field not in known:
             extra[field] = _text(tokens)

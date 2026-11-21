@@ -1,5 +1,5 @@
 import type { InspectBand, InspectCell, InspectPage, InspectSingle } from '../../api/lab';
-import { COLUMN_LABELS, labelOf } from '../../lib/columns';
+import { COLUMN_LABELS, canonicalField, labelOf } from '../../lib/columns';
 
 export type ToolMode = 'select' | 'draw_col' | 'draw_area' | 'draw_single' | 'header_line' | 'spread';
 export type PageSlot = 'first' | 'middle' | 'last' | 'auto';
@@ -250,7 +250,7 @@ export function fromSavedLayout(layoutRaw: unknown): {
       headerY: clamp01(Number(t.headerY ?? area.y ?? 0.16)),
     });
     for (const c of t.columns || []) {
-      const fkey = c.field || c.fields?.[0] || 'summary';
+      const fkey = canonicalField(c.field || c.fields?.[0] || 'summary');
       columns.push({
         id: uid('col'),
         regionId: rid,
