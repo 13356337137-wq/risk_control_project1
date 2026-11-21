@@ -1,4 +1,5 @@
 import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
+import ErrorBoundary from '../../ui/ErrorBoundary';
 import { clearSession, getUser } from '../../auth/store';
 import TaskListPage from './TaskListPage';
 import QueuePage from './QueuePage';
@@ -86,6 +87,7 @@ export default function BankerApp() {
         </nav>
 
         <main className="content">
+          <ErrorBoundary>
           <Routes>
             <Route index element={<DashboardPage />} />
             <Route path="tasks" element={<TaskListPage />} />
@@ -123,6 +125,7 @@ export default function BankerApp() {
               }
             />
           </Routes>
+          </ErrorBoundary>
         </main>
       </div>
     </div>

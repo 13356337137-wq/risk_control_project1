@@ -39,6 +39,21 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'txns', label: '交易流水明细' },
 ];
 
+const TASK_STATUS_LABEL: Record<string, string> = {
+  PENDING: '待排队',
+  QUEUED: '排队中',
+  PARSING: '解析中',
+  VERIFYING: '核验中',
+  REPORTING: '出报告中',
+  DONE: '已完成',
+  NEED_SUPPLEMENT: '需补件',
+  FAILED: '失败',
+};
+
+function statusLabel(code: string): string {
+  return TASK_STATUS_LABEL[code] || code;
+}
+
 const DOMAIN: Record<string, string> = {
   A: '收入能力',
   B: '负债与还款',
@@ -209,15 +224,25 @@ export default function ReportPage() {
   const PAGE = 100;
 
   const loadReport = useCallback(() => {
+    // 报告 404 时也要把任务本身读出来：否则页面只能显示「报告不存在」，
+    // 用户不知道是任务失败、还在排队，还是报告真的被删了。
     Promise.all([
-      getReport(taskId),
+      getReport(taskId)
+        .then((rep) => ({ ok: true as const, rep }))
+        .catch((err) => ({ ok: false as const, err })),
       getBankTask(taskId).catch(() => null),
       getMetricDefinitions().catch(() => ({ items: [] as MetricDef[] })),
       getVerificationDefinitions().catch(() => ({ items: [] as { code: string; method: string }[] })),
       listTemplates().catch(() => [] as TemplateRow[]),
     ])
-      .then(([rep, taskData, defsData, verData, tplList]) => {
-        setReport(rep);
+      .then(([repRes, taskData, defsData, verData, tplList]) => {
+        if (repRes.ok) {
+          setReport(repRes.rep);
+          setError('');
+        } else {
+          setReport(null);
+          setError(getErrorMessage(repRes.err, 'banker'));
+        }
         if (taskData) setTaskMeta(taskData);
         const dMap: Record<string, MetricDef> = {};
         for (const d of defsData.items || []) dMap[d.code] = d;
@@ -226,7 +251,6 @@ export default function ReportPage() {
         for (const v of verData.items || []) mMap[v.code] = v.method;
         setCheckMethods(mMap);
         setTemplates(tplList.filter((t) => t.status === 'enabled'));
-        setError('');
       })
       .catch((err) => setError(getErrorMessage(err, 'banker')));
   }, [taskId]);
@@ -384,10 +408,32 @@ export default function ReportPage() {
   }, [report?.conclusions]);
 
   if (error && !report) {
+    const st = taskMeta?.status || '';
+    const why: Record<string, string> = {
+      PENDING: '任务还在排队，报告要等解析跑完才会生成。',
+      QUEUED: '任务在队列里等进程，报告还没生成。',
+      PARSING: '正在解析原件，通常几十秒内出报告。',
+      NEED_SUPPLEMENT: '分析结论是「需补件」：请补齐材料后会自动重跑，报告随之更新。',
+      FAILED: '任务失败了，所以没有报告；可以直接重试或看队列里的失败原因。',
+    };
     return (
       <div className="panel wide">
         <Notice>{error}</Notice>
-        <Link className="btn btn-ghost" to="/bank/tasks">回到列表</Link>
+        <div className="report-missing">
+          <p>
+            任务 #{taskId}
+            {st ? <> · 当前状态 <b>{statusLabel(st)}</b></> : null}
+            {taskMeta?.failure_code ? <> · 失败码 <b>{taskMeta.failure_code}</b></> : null}
+          </p>
+          {st && why[st] ? <p className="muted">{why[st]}</p> : null}
+          <div className="empty-actions">
+            {st === 'FAILED' ? (
+              <Link className="btn" to="/bank/queue">去任务队列重试</Link>
+            ) : null}
+            <Link className="btn btn-ghost" to="/bank/tasks">回到任务列表</Link>
+            <button className="btn btn-ghost" onClick={loadReport}>重新加载</button>
+          </div>
+        </div>
       </div>
     );
   }
