@@ -188,6 +188,8 @@ def create_task(
     data = file.file.read()
     if not data:
         raise HTTPException(400, "文件为空")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, detail={"code": "E_LIMIT", "message": f"上传文件超过大小上限（{MAX_UPLOAD_BYTES // (1024 * 1024)} MB）"})
     digest = hashlib.sha256(data).hexdigest()
 
     path = STORAGE / f"{uuid.uuid4().hex}{Path(file.filename or '').suffix or '.pdf'}"

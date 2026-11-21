@@ -1,6 +1,7 @@
 import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import { clearSession, getUser } from '../../auth/store';
 import TaskListPage from './TaskListPage';
+import QueuePage from './QueuePage';
 import ReportPage from './ReportPage';
 import AuditPage from './AuditPage';
 import UsersPage from './UsersPage';
@@ -60,6 +61,7 @@ export default function BankerApp() {
             <span className="sider-title">受理与报告</span>
             <NavLink to="/bank" end>看板</NavLink>
             <NavLink to="/bank/tasks">任务与报告</NavLink>
+            <NavLink to="/bank/queue">任务队列</NavLink>
           </div>
           <div className="sider-group">
             <span className="sider-title">模板</span>
@@ -85,6 +87,7 @@ export default function BankerApp() {
           <Routes>
             <Route index element={<DashboardPage />} />
             <Route path="tasks" element={<TaskListPage />} />
+            <Route path="queue" element={<QueuePage />} />
             <Route path="report/:id" element={<ReportPage />} />
             <Route path="annotate" element={<AnnotatePage />} />
             <Route path="annotate/*" element={<AnnotatePage />} />
@@ -98,8 +101,8 @@ export default function BankerApp() {
             <Route path="glossary" element={<GlossaryPage />} />
             <Route path="metrics" element={<MetricDefsPage />} />
             <Route path="verifications" element={<VerificationDefsPage />} />
-            <Route path="audit" element={<AuditPage />} />
-            <Route path="users" element={<UsersPage />} />
+            <Route path="audit" element={isAdmin ? <AuditPage /> : <Navigate to="/bank" replace />} />
+            <Route path="users" element={isAdmin ? <UsersPage /> : <Navigate to="/bank" replace />} />
             {/* 规范路由与旧书签别名兼容 */}
             <Route path="dashboard" element={<Navigate to="/bank" replace />} />
             <Route path="ocr-routing" element={<Navigate to="/bank/ocr" replace />} />

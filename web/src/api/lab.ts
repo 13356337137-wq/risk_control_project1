@@ -1,4 +1,4 @@
-import { request } from './client';
+import { request, requestBlob } from './client';
 
 /** 特征 Lab 的接口在独立服务上（8020），由 dev 代理按路径前缀分流。 */
 
@@ -152,12 +152,8 @@ export function sampleFileUrl(sample: string): string {
 }
 
 export async function fetchSampleBytes(sample: string): Promise<ArrayBuffer> {
-  const token = localStorage.getItem('bs_token');
-  const res = await fetch(sampleFileUrl(sample), {
-    headers: token ? { Authorization: 'Bearer ' + token } : {},
-  });
-  if (!res.ok) throw new Error('样本文件加载失败（' + res.status + '）');
-  return res.arrayBuffer();
+  const blob = await requestBlob('/lab/sample-file?sample=' + encodeURIComponent(sample));
+  return blob.arrayBuffer();
 }
 
 export type CustomFeature = {

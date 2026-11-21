@@ -11,7 +11,7 @@ from config import settings
 from db.session import init_db
 from helpers.logging_config import configure_logging
 from helpers.security import require_banker
-from routers import (audit, custom_metrics, dashboard, auth, entities, ocr_routing, reports,
+from routers import (audit, custom_metrics, dashboard, auth, entities, ocr_routing, queue, reports,
                      tasks, templates, thresholds)
 
 _REPO_ROOT = _Path(__file__).resolve().parents[1]
@@ -79,6 +79,7 @@ app.include_router(audit.router, prefix=settings.api_prefix)
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(thresholds.router, prefix=settings.api_prefix)
 app.include_router(ocr_routing.router, prefix=settings.api_prefix)
+app.include_router(queue.router, prefix=settings.api_prefix)
 app.include_router(rc_router, dependencies=[Depends(require_banker)])
 
 

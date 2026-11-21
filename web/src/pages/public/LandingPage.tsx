@@ -18,11 +18,11 @@ export default function LandingPage() {
         </p>
 
         <div className="choices">
-          <Link className="choice" to={user ? homeFor(user) : '/login'}>
+          <Link className="choice" to={user?.role === 'banker' ? '/bank' : '/login?role=banker'}>
             <strong>银行员工</strong>
             <span>受理流水、看报告、标注模板、配阈值</span>
           </Link>
-          <Link className="choice" to="/login?role=borrower">
+          <Link className="choice" to={user?.role === 'borrower' ? '/app' : '/login?role=borrower'}>
             <strong>借款人</strong>
             <span>上传本人流水，查看处理进度</span>
           </Link>

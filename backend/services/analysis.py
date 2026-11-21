@@ -4,6 +4,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -194,7 +195,33 @@ def run_analysis(
             layout=template.get("layout"),
         )
 
+    pipeline_backend = os.getenv("PIPELINE_BACKEND", "legacy").strip().lower()
     parsed = parse(raw, tpl)
+    # B1: 当显式开启 PIPELINE_BACKEND=rc_platform 或主解析 0 笔时，尝试用 rc_platform 锚点扩散 + parse_v2 兜底
+    if (pipeline_backend == "rc_platform" or not parsed.transactions) and raw[:4] == b"%PDF":
+        try:
+            from algorithm.ocr.models import Transaction as _LegacyTxn  # noqa: PLC0415
+            from rc_platform.capabilities.layout.detect import detect_layout  # noqa: PLC0415
+            from rc_platform.capabilities.layout.words import extract_pdf_words  # noqa: PLC0415
+            from rc_platform.capabilities.parse_v2.table_reader import read_statement  # noqa: PLC0415
+
+            rc_pages = extract_pdf_words(raw)
+            rc_plan = detect_layout(rc_pages)
+            rc_stmt = read_statement(rc_pages, rc_plan)
+            if len(rc_stmt.rows) > len(parsed.transactions):
+                parsed.transactions = [
+                    _LegacyTxn(
+                        page_no=r.page_no, row_no=r.row_no, txn_date=r.txn_date,
+                        trade_time=r.trade_time, reference_no=r.reference_no,
+                        summary=r.summary, counterparty_name=r.counterparty_name,
+                        direction=r.direction, amount=r.amount, balance=r.balance,
+                        confidence=r.confidence, extra=r.extra,
+                    )
+                    for r in rc_stmt.rows
+                ]
+                pipeline_backend = "rc_platform"
+        except Exception:  # noqa: BLE001 - 兜底失败不影响主流程
+            pass
     file_layer = analyze_file(raw, carrier=carrier)
     content_layer = analyze_content(parsed)
     ledger = analyze_ledger(parsed.transactions)
@@ -274,6 +301,7 @@ def run_analysis(
             "model": (rcfg or {}).get("model") or "PP-OCRv6",
         }
     return {
+        "pipeline_backend": pipeline_backend,
         "ocr_route": route_info,
         "carrier": carrier,
         "pages": pages,

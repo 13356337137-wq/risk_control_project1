@@ -237,7 +237,6 @@ def run_task(task_id: int, password: str | None = None) -> dict:
 
         session.query(Txn).filter(Txn.task_id == task.id).delete()
         session.query(MetricValue).filter(MetricValue.task_id == task.id).delete()
-        session.query(Report).filter(Report.task_id == task.id).delete()
 
         for t in result["transactions"]:
             session.add(Txn(
@@ -270,9 +269,10 @@ def run_task(task_id: int, password: str | None = None) -> dict:
             pass
 
         report_row = result["report"]
-        session.query(Report).filter(Report.task_id == task.id).delete()
+        from sqlalchemy import func as _sa_func  # noqa: PLC0415
+        prev_ver = session.query(_sa_func.max(Report.version)).filter(Report.task_id == task.id).scalar() or 0
         session.add(Report(
-            task_id=task.id, version=1, carrier=report_row["carrier"],
+            task_id=task.id, version=int(prev_ver) + 1, carrier=report_row["carrier"],
             verdict=report_row["verdict"], verdict_reason=report_row["verdict_reason"],
             layers=report_row["layers"], limitations=report_row["limitations"],
             evidence=report_row["evidence"], materials=report_row["materials"],

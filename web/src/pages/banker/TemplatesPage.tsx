@@ -195,7 +195,7 @@ export default function TemplatesPage() {
 
       <table className="grid">
         <thead>
-          <tr><th>编号</th><th>银行</th><th>版本</th><th>状态</th><th>框选与样本</th><th>字段</th><th>更新时间</th><th>操作</th></tr>
+          <tr><th>编号</th><th>银行</th><th>版本</th><th>状态</th><th>框选与样本</th><th>使用统计</th><th>字段</th><th>更新时间</th><th>操作</th></tr>
         </thead>
         <tbody>
           {shown.map((row) => (
@@ -208,6 +208,9 @@ export default function TemplatesPage() {
                 <span className={row.has_layout ? 'pill ok' : 'pill'}>{row.has_layout ? '有框选布局' : '仅列映射'}</span>
                 {' '}
                 {row.has_sample && <span className="pill ok">含样本</span>}
+              </td>
+              <td className="small muted">
+                {row.tasks_total ? `${row.tasks_total} 次 · ${Math.round((row.success_rate ?? 0) * 100)}%` : '暂无'}
               </td>
               <td className="small muted">{Object.keys(row.field_map ?? {}).length} 项</td>
               <td className="small muted">{row.updated_at ? new Date(row.updated_at).toLocaleString() : '—'}</td>

@@ -3,7 +3,7 @@ import type { ChangeEvent, DragEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ApiError, getErrorMessage } from '../../api/errors';
 import { composeTask, createTask, listMyTasks, type BorrowerTaskItem } from '../../api/borrower';
-import { BANK_OPTIONS } from '../../components/annotate/types';
+import { BANK_OPTIONS } from '../../lib/banks';
 import { Button } from '../../ui/Button';
 import { Field } from '../../ui/Field';
 import { Notice } from '../../ui/Notice';

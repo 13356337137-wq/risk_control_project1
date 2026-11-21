@@ -38,14 +38,37 @@ def list_templates(bank_code: str | None = None, include_deleted: bool = False,
     if bank_code:
         stmt = stmt.where(Template.bank_code == bank_code.upper())
     rows = db.execute(stmt).scalars().all()
-    return [{"id": t.id, "bank_code": t.bank_code, "version": t.version,
-             "status": t.status, "field_map": t.field_map, "header_columns": t.header_columns,
-             "required_fields": t.required_fields,
-             "has_layout": bool(t.layout and (t.layout.get("tables") or t.layout.get("boxes"))),
-             "has_sample": t.sample_file_id is not None,
-             "created_at": t.created_at.isoformat() if t.created_at else None,
-             "updated_at": t.updated_at.isoformat() if t.updated_at else None,
-             "deleted_at": t.deleted_at.isoformat() if t.deleted_at else None} for t in rows]
+    # 聚合每个模板的历史任务使用次数与完成率，供模板列表直观展示
+    usage_map: dict[int, tuple[int, int]] = {}
+    if rows:
+        tids = [t.id for t in rows]
+        stat_rows = db.execute(
+            select(Task.template_id, Task.status, func.count(Task.id))
+            .where(Task.template_id.in_(tids), Task.deleted_at.is_(None))
+            .group_by(Task.template_id, Task.status)
+        ).all()
+        for tid, st, cnt in stat_rows:
+            tot, done = usage_map.get(int(tid), (0, 0))
+            tot += int(cnt)
+            if st == "DONE":
+                done += int(cnt)
+            usage_map[int(tid)] = (tot, done)
+    out = []
+    for t in rows:
+        tot, done = usage_map.get(t.id, (0, 0))
+        out.append({
+            "id": t.id, "bank_code": t.bank_code, "version": t.version,
+            "status": t.status, "field_map": t.field_map, "header_columns": t.header_columns,
+            "required_fields": t.required_fields,
+            "has_layout": bool(t.layout and (t.layout.get("tables") or t.layout.get("boxes"))),
+            "has_sample": t.sample_file_id is not None,
+            "tasks_total": tot,
+            "success_rate": round(done / tot, 4) if tot > 0 else None,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+            "deleted_at": t.deleted_at.isoformat() if t.deleted_at else None,
+        })
+    return out
 
 
 @router.post("")

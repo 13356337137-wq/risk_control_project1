@@ -90,6 +90,9 @@ export default function LoginPage() {
             <span className="sep">·</span>
             <Link to="/">返回首页</Link>
           </p>
+          <p className="small muted" style={{ textAlign: 'center', marginTop: 6 }}>
+            忘记密码？请联系银行系统管理员协助重置。
+          </p>
         </form>
       </div>
     </div>

@@ -252,6 +252,8 @@ export type TemplateRow = {
   required_fields?: string[] | null;
   has_layout?: boolean;
   has_sample?: boolean;
+  tasks_total?: number;
+  success_rate?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
   deleted_at?: string | null;
@@ -308,7 +310,7 @@ export type TemplateLayout = {
     pages?: Record<string, { width: number; height: number }>;
     page_count?: number;
     boxes?: TemplateLayoutBox[];
-    /** 模板的真实页面尺寸（pt）：旧版 boxes 回看时用它换算，别再硬退 595×842 */
+    /** 模板真实页面尺寸（pt）：旧版 boxes 回看用它换算，别硬退 595×842 */
     page_size?: { w?: number; h?: number };
   } | null;
   field_map: Record<string, unknown> | null;
@@ -572,6 +574,43 @@ export type OcrRouting = {
   has_api_key: boolean;
   credential_ready: boolean;
 };
+
+export type QueueStats = {
+  queued: number;
+  running: number;
+  failed: number;
+  done: number;
+  need_supplement: number;
+  active_workers: number;
+  max_workers: number;
+  last_finished_at: number;
+};
+
+export type QueueJobItem = {
+  task_id: number;
+  biz_no: string;
+  status: string;
+  queue_position: number | null;
+  carrier?: string | null;
+  failure_code?: string | null;
+  created_at?: string | null;
+};
+
+export function getQueueStats(): Promise<QueueStats> {
+  return request<QueueStats>('/queue/stats');
+}
+
+export function listQueueJobs(includeFailed = true): Promise<{ items: QueueJobItem[]; total: number }> {
+  return request(`/queue/jobs?include_failed=${includeFailed ? 'true' : 'false'}`);
+}
+
+export function retryQueueJob(taskId: number): Promise<{ task_id: number; status: string; mode: string }> {
+  return request(`/queue/jobs/${taskId}/retry`, { method: 'POST' });
+}
+
+export function cancelQueueJob(taskId: number): Promise<{ task_id: number; status: string; cancelled: boolean }> {
+  return request(`/queue/jobs/${taskId}/cancel`, { method: 'POST' });
+}
 
 export function getOcrRouting(): Promise<OcrRouting> {
   return request<OcrRouting>('/ocr-routing');
