@@ -77,6 +77,8 @@ export default function BankerApp() {
           </div>
           <div className="sider-group">
             <span className="sider-title">系统</span>
+            <NavLink to="/bank/metrics">自定义口径</NavLink>
+            <NavLink to="/bank/verifications">核验口径字典</NavLink>
             <NavLink to="/bank/glossary">口径说明</NavLink>
             {isAdmin ? <NavLink to="/bank/audit">操作审计</NavLink> : null}
             {isAdmin ? <NavLink to="/bank/users">账号</NavLink> : null}

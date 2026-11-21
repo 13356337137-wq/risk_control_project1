@@ -711,6 +711,13 @@ def _run_preview(raw: bytes, bank_code: str, version: int, field_map: dict,
                 return str(val)
         return None
 
+    extra_meta: dict[str, str] = {}
+    for hdr in (parsed.headers or []):
+        for k, hf in (getattr(hdr, "extra_fields", None) or {}).items():
+            val = getattr(hf, "value", None)
+            if val and k not in extra_meta:
+                extra_meta[k] = str(val)
+
     return {
         "template_id": template_id,
         "txn_count": len(parsed.transactions),
@@ -723,7 +730,12 @@ def _run_preview(raw: bytes, bank_code: str, version: int, field_map: dict,
             "account_name": _first_header_val("account_name"),
             "bank_branch": _first_header_val("bank_branch"),
             "account_type": _first_header_val("account_type"),
+            "currency": _first_header_val("currency"),
+            "period_start": _first_header_val("period_start"),
+            "period_end": _first_header_val("period_end"),
+            **extra_meta,
         },
+        "extra_meta": extra_meta,
         "required_fields": required,
         "missing_columns": missing,
         "empty_columns": empty,
@@ -932,9 +944,12 @@ def _normalize_import_item(raw: dict) -> dict:
             rect = mb.get("rect") if isinstance(mb.get("rect"), dict) else mb
             p_raw = int(mb.get("page", 1 if is_one_based else 0))
             p_zero = max(0, p_raw - 1) if is_one_based else max(0, p_raw)
+            mfield = str(mb.get("field") or "")
+            if mfield == "branch":
+                mfield = "bank_branch"
             norm_meta.append({
-                "field": str(mb.get("field") or ""),
-                "label": str(mb.get("label") or mb.get("field") or ""),
+                "field": mfield,
+                "label": str(mb.get("label") or mfield),
                 "value": str(mb.get("value") or ""),
                 "page": p_zero,
                 "x": float(rect.get("x", 0)),
@@ -943,7 +958,11 @@ def _normalize_import_item(raw: dict) -> dict:
                 "h": float(rect.get("h", 0.03)),
             })
         norm_custom = [
-            {"key": str(cf.get("key") or cf.get("code") or ""), "label": str(cf.get("label") or cf.get("code") or "")}
+            {
+                "key": str(cf.get("key") or cf.get("code") or ""),
+                "label": str(cf.get("label") or cf.get("code") or ""),
+                **({"kind": str(cf["kind"])} if cf.get("kind") else {}),
+            }
             for cf in (raw.get("custom_fields") or [])
             if cf.get("key") or cf.get("code")
         ]
@@ -1047,7 +1066,7 @@ def load_builtin_templates(
     db: Session = Depends(get_session),
     user=Depends(require_banker),
 ):
-    """一键载入系统内置的标准银行模板（工行/招行/建行），跳过库中已有活跃或草稿版本的银行。"""
+    """一键载入系统内置的标准银行模板（工行/招行/建行/农行/中行/广发），仅跳过已有可用或草稿版本的银行（force=true 时强制新增新版）。"""
     samples_dir = _Path(__file__).resolve().parents[2] / "algorithm" / "integration" / "samples"
     builtin_raws: list[dict] = []
     if samples_dir.exists():
@@ -1056,19 +1075,58 @@ def load_builtin_templates(
                 builtin_raws.append(json.loads(fp.read_text(encoding="utf-8")))
             except Exception:  # noqa: BLE001
                 continue
-    # 补充建设银行标准电子版表头模板
-    builtin_raws.append({
-        "bank_code": "CCB",
-        "field_map": {
-            "txn_date": "记账日期",
-            "summary": "摘要",
-            "amount": "交易金额",
-            "balance": "账户余额",
-            "counterparty": "对方户名",
+    # 补充主流银行标准电子版表头与基础区框模板，避免无几何布局的裸模板
+    builtin_raws.extend([
+        {
+            "bank_code": "CCB",
+            "field_map": {
+                "txn_date": "记账日期",
+                "summary": "摘要",
+                "amount": "交易金额",
+                "balance": "账户余额",
+                "counterparty": "对方户名",
+            },
+            "header_columns": ["序号", "记账日期", "交易时间", "交易地点/附言", "摘要", "交易金额", "账户余额", "对方户名"],
+            "required_fields": ["txn_date", "amount", "balance"],
         },
-        "header_columns": ["序号", "记账日期", "交易时间", "交易地点/附言", "摘要", "交易金额", "账户余额", "对方户名"],
-        "required_fields": ["txn_date", "amount", "balance"],
-    })
+        {
+            "bank_code": "ABC",
+            "field_map": {
+                "txn_date": "交易日期",
+                "summary": "交易摘要",
+                "amount": "交易金额",
+                "balance": "本次余额",
+                "counterparty": "对方户名",
+            },
+            "header_columns": ["交易日期", "交易时间", "交易金额", "本次余额", "对方户名", "交易摘要", "交易渠道"],
+            "required_fields": ["txn_date", "amount", "balance"],
+        },
+        {
+            "bank_code": "BOC",
+            "field_map": {
+                "txn_date": "交易日期",
+                "currency": "币别",
+                "amount": "交易金额",
+                "balance": "余额",
+                "summary": "业务摘要",
+                "counterparty": "对方账户名称",
+            },
+            "header_columns": ["交易日期", "交易时间", "币别", "钞汇", "交易金额", "余额", "业务摘要", "对方账户名称"],
+            "required_fields": ["txn_date", "amount", "balance"],
+        },
+        {
+            "bank_code": "CGB",
+            "field_map": {
+                "txn_date": "交易时间",
+                "summary": "摘要",
+                "amount": "交易金额",
+                "balance": "账户余额",
+                "counterparty": "对方姓名",
+            },
+            "header_columns": ["交易时间", "摘要", "币种", "交易金额", "账户余额", "对方账号", "对方姓名"],
+            "required_fields": ["txn_date", "amount", "balance"],
+        },
+    ])
     is_admin = bool(getattr(user, "is_admin", False))
     can_pub = bool(publish and is_admin)
     loaded: list[dict] = []
@@ -1078,7 +1136,11 @@ def load_builtin_templates(
         bank = norm["bank_code"]
         if not force:
             exists = db.execute(
-                select(Template).where(Template.bank_code == bank, Template.deleted_at.is_(None))
+                select(Template).where(
+                    Template.bank_code == bank,
+                    Template.deleted_at.is_(None),
+                    Template.status.in_(("enabled", "draft")),
+                )
             ).scalars().first()
             if exists is not None:
                 skipped.append(bank)

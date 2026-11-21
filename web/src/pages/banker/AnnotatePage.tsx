@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  analyzeTemplateFields,
   getTaskFile,
   getTemplate,
   getTemplateSample,
   listTasks,
+  listTemplates,
   previewDraftTemplate,
   reparseTaskCanvas,
   saveTemplateFromCanvas,
+  type HeaderFieldSpec,
+  type ShortFieldSpec,
   type TaskSummary,
   type TemplatePreview,
+  type TemplateRow,
 } from '../../api/banker';
 import {
   fetchSampleBytes,
@@ -26,9 +31,10 @@ import { getUser } from '../../auth/store';
 import { AnnotateToolbar } from '../../components/annotate/AnnotateToolbar';
 import { CanvasStage } from '../../components/annotate/CanvasStage';
 import { PreviewDrawer } from '../../components/annotate/PreviewDrawer';
-import { StepSidebar } from '../../components/annotate/StepSidebar';
+import { StepSidebar, type ValidationIssue } from '../../components/annotate/StepSidebar';
 import {
   bankLabel,
+  buildBoxesFromAnalyzeResult,
   buildBoxesFromInspectPage,
   buildTemplatePayload,
   DEFAULT_REQUIRED_FIELDS,
@@ -44,6 +50,7 @@ import {
   BANK_OPTIONS,
 } from '../../components/annotate/types';
 import type { PageRenderSize } from '../../components/PdfPageCanvas';
+import { extractStatement, isArchive } from '../../lib/archive';
 import { Button } from '../../ui/Button';
 
 type SourceState = {
@@ -87,6 +94,9 @@ export function AnnotatePage() {
 
   const [samples, setSamples] = useState<LabSample[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [keepLayoutOnUpload, setKeepLayoutOnUpload] = useState(Boolean(queryTemplateId));
+  const pendingZipRef = useRef<{ file: File; attempts: number } | null>(null);
   const [source, setSource] = useState<SourceState>({
     mode: 'sample',
     label: '',
@@ -293,46 +303,63 @@ export function AnnotatePage() {
     [applyInspectReport],
   );
 
-  // Initial load: samples + recent tasks + optional ?templateId= / ?taskId=
+  const loadTemplateById = useCallback(
+    async (tid: number) => {
+      setBusy(true);
+      setError('');
+      setNotice('');
+      setPreview(null);
+      try {
+        const tpl = await getTemplate(tid);
+        setEditingTemplateId(tpl.id);
+        setBankCode(tpl.bank_code || '');
+        setRequiredFields(tpl.required_fields?.length ? tpl.required_fields : DEFAULT_REQUIRED_FIELDS);
+        const loaded = fromSavedLayout(tpl.layout);
+        setRegions(loaded.regions);
+        setColumns(loaded.columns);
+        setSingles(loaded.singles);
+        setCustomFields(loaded.customFields);
+        setActiveRegionId(loaded.regions[0]?.id ?? null);
+        setKeepLayoutOnUpload(loaded.columns.length > 0 || loaded.singles.length > 0);
+        setPast([]);
+        setFuture([]);
+        try {
+          const sampleBlob = await getTemplateSample(tpl.id);
+          const sampleName = sampleBlob.type.startsWith('image/') ? `template-${tpl.id}.png` : `template-${tpl.id}.pdf`;
+          await loadBlobSource(sampleBlob, sampleName, 'template', `模板 #${tpl.id} 样本`, undefined, true, 0);
+        } catch {
+          setNotice(
+            loaded.columns.length > 0
+              ? `已载入模板 #${tpl.id}（${bankLabel(tpl.bank_code)} v${tpl.version}）的框选布局；暂无自带样本，在右侧上传流水 PDF 可保持框选直接预览。`
+              : `已载入模板 #${tpl.id}（仅列映射，无几何框选）；请在右侧上传样例文件并框选或运行智能识别。`,
+          );
+          setBusy(false);
+        }
+      } catch (e) {
+        setError((e as Error).message || '载入模板失败');
+        setBusy(false);
+      }
+    },
+    [loadBlobSource],
+  );
+
+  // Initial load: samples + recent tasks + template list + optional ?templateId= / ?taskId=
   useEffect(() => {
     let cancelled = false;
     async function init() {
       try {
-        const [sRes, tRes] = await Promise.all([
+        const [sRes, tRes, tplRes] = await Promise.all([
           listSamples().catch(() => ({ items: [] as LabSample[] })),
           listTasks({ limit: 30 }).catch(() => ({ items: [] as TaskSummary[] })),
+          listTemplates(false).catch(() => [] as TemplateRow[]),
         ]);
         if (cancelled) return;
         setSamples(sRes.items || []);
         setTasks(tRes.items || []);
+        setTemplates(tplRes || []);
 
         if (queryTemplateId) {
-          setBusy(true);
-          const tpl = await getTemplate(queryTemplateId);
-          if (cancelled) return;
-          setEditingTemplateId(tpl.id);
-          setBankCode(tpl.bank_code || '');
-          setRequiredFields(tpl.required_fields?.length ? tpl.required_fields : DEFAULT_REQUIRED_FIELDS);
-          const loaded = fromSavedLayout(tpl.layout);
-          setRegions(loaded.regions);
-          setColumns(loaded.columns);
-          setSingles(loaded.singles);
-          setCustomFields(loaded.customFields);
-          setActiveRegionId(loaded.regions[0]?.id ?? null);
-          setNotice(`已载入模板 #${tpl.id}（${bankLabel(tpl.bank_code)} v${tpl.version}）的画布框选。`);
-
-          try {
-            const sampleBlob = await getTemplateSample(tpl.id);
-            if (!cancelled) {
-              const sampleName = sampleBlob.type.startsWith('image/') ? `template-${tpl.id}.png` : `template-${tpl.id}.pdf`;
-              await loadBlobSource(sampleBlob, sampleName, 'template', `模板 #${tpl.id} 样本`, undefined, true, 0);
-            }
-          } catch {
-            if (!cancelled) {
-              setNotice(`已载入模板 #${tpl.id} 的框选布局；该模板暂无样本原件，可在右侧上传样本 PDF/图片用于试跑预览。`);
-              setBusy(false);
-            }
-          }
+          await loadTemplateById(queryTemplateId);
           return;
         }
 
@@ -364,7 +391,7 @@ export function AnnotatePage() {
     return () => {
       cancelled = true;
     };
-  }, [queryTemplateId, queryTaskId, loadBlobSource, loadSampleSource]);
+  }, [queryTemplateId, queryTaskId, loadBlobSource, loadSampleSource, loadTemplateById]);
 
   // Keyboard shortcuts: Ctrl+Z / Ctrl+Y / Delete
   useEffect(() => {
@@ -408,11 +435,98 @@ export function AnnotatePage() {
     try {
       const blob = await getTaskFile(tid);
       const name = matched?.carrier === 'IMAGE' || blob.type.startsWith('image/') ? `task-${tid}.png` : `task-${tid}.pdf`;
-      await loadBlobSource(blob, name, 'task', `任务 #${tid}`, password || undefined, false, 0);
+      const preserve = keepLayoutOnUpload && (columns.length > 0 || singles.length > 0);
+      await loadBlobSource(blob, name, 'task', `任务 #${tid}`, password || undefined, preserve, 0);
     } catch (e) {
       setError((e as Error).message || '读取任务原件失败');
       setBusy(false);
     }
+  };
+
+  const handleUploadFileSource = async (file: File, zipPwd?: string) => {
+    pendingZipRef.current = null;
+    if (isArchive(file)) {
+      setBusy(true);
+      setError('');
+      setNotice('');
+      try {
+        const out = await extractStatement(file, zipPwd);
+        if (out.status === 'need-password' || out.status === 'wrong-password') {
+          const prevAttempts = zipPwd ? 1 : 0;
+          pendingZipRef.current = { file, attempts: prevAttempts };
+          setNeedPassword(true);
+          setBusy(false);
+          setError(
+            out.status === 'wrong-password'
+              ? `压缩包 ${out.name} 口令不正确，请在右侧重新输入解锁。`
+              : `压缩包内文件 ${out.name} 已加密，请在右侧输入解压口令后点「解锁分析」。`,
+          );
+          return;
+        }
+        const preserve = keepLayoutOnUpload && (columns.length > 0 || singles.length > 0);
+        await loadBlobSource(out.blob, out.name, 'file', `${file.name} › ${out.name}`, undefined, preserve, 0);
+        return;
+      } catch (e) {
+        setError((e as Error).message || '读取 ZIP 压缩包失败');
+        setBusy(false);
+        return;
+      }
+    }
+    const preserve = keepLayoutOnUpload && (columns.length > 0 || singles.length > 0);
+    await loadBlobSource(file, file.name, 'file', file.name, password || undefined, preserve, 0);
+  };
+
+  const handleAnalyzeFieldsInCanvas = async (shortSpecs: ShortFieldSpec[], headerSpecs: HeaderFieldSpec[]) => {
+    if (!source.blob) {
+      setError('请先上传或载入一份样本文件，再执行智能识别。');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const res = await analyzeTemplateFields({
+        file: source.blob,
+        fileName: source.fileName,
+        shortFields: shortSpecs,
+        headerFields: headerSpecs,
+        bankCode: bankCode || undefined,
+        password: password || undefined,
+        save: false,
+      });
+      commitHistory();
+      const built = buildBoxesFromAnalyzeResult(res, shortSpecs, headerSpecs);
+      if (built.regions.length > 0) setRegions(built.regions);
+      setColumns(built.columns);
+      setSingles(built.singles);
+      setCustomFields(built.customFields);
+      if (built.regions[0]) setActiveRegionId(built.regions[0].id);
+      if (!bankCode && res.bank_code && res.bank_code !== 'UNKNOWN') setBankCode(res.bank_code);
+      const sHit = res.short_results.filter((x) => x.matched).length;
+      const hHit = res.header_results.filter((x) => x.matched).length;
+      setNotice(
+        `智能字段分析完成（${res.engine || 'layout'}）：短字段命中 ${sHit}/${res.short_results.length}，标题字段命中 ${hHit}/${res.header_results.length}，已自动更新画布框选。`,
+      );
+    } catch (e) {
+      setError((e as Error).message || '智能字段分析失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSwapAmountBalance = () => {
+    const hasAmt = columns.some((c) => c.field === 'amount');
+    const hasBal = columns.some((c) => c.field === 'balance');
+    if (!hasAmt || !hasBal) return;
+    commitHistory();
+    setColumns((prev) =>
+      prev.map((c) => {
+        if (c.field === 'amount') return { ...c, field: 'balance', fields: ['balance'] };
+        if (c.field === 'balance') return { ...c, field: 'amount', fields: ['amount'] };
+        return c;
+      }),
+    );
+    setNotice('已对调「交易金额」与「余额」列绑定，请重新点「立即试跑预览」验证。');
   };
 
   const handleReOcrPage = async () => {
@@ -675,6 +789,8 @@ export function AnnotatePage() {
       });
       setEditingTemplateId(res.id);
       setSavedBanner({ id: res.id, version: res.version, status: res.status });
+      listTemplates(false).then(setTemplates).catch(() => {});
+      navigate(`/bank/annotate?templateId=${res.id}`, { replace: true });
       setNotice(
         publish
           ? `已保存并启用模板 #${res.id}（${bankLabel(res.bank_code)} v${res.version}）。`
@@ -709,6 +825,43 @@ export function AnnotatePage() {
   const pageRegions = regions.filter((r) => r.page === pageIndex);
   const currentRegion = pageRegions.find((r) => r.id === activeRegionId) || pageRegions[0];
 
+  const validationIssues: ValidationIssue[] = [];
+  if (!bankCode.trim()) {
+    validationIssues.push({ code: 'T001', level: 'error', message: '未选择或填写银行代码' });
+  }
+  if (columns.length === 0) {
+    validationIssues.push({ code: 'T002', level: 'error', message: '尚未标注任何交易列框' });
+  } else {
+    const mappedSet = new Set<string>();
+    for (const c of columns) {
+      for (const fk of c.fields?.length ? c.fields : [c.field]) {
+        mappedSet.add(fk);
+        if (fk === 'counterparty_name') mappedSet.add('counterparty');
+        if (fk === 'counterparty') mappedSet.add('counterparty_name');
+      }
+    }
+    const missingReq = requiredFields.filter((f) => !mappedSet.has(f));
+    if (missingReq.length > 0) {
+      validationIssues.push({ code: 'T003', level: 'warn', message: `缺少必需列：${missingReq.join('、')}` });
+    }
+    for (const r of pageRegions) {
+      const rCols = columns.filter((c) => c.regionId === r.id).sort((a, b) => a.x - b.x);
+      for (let i = 1; i < rCols.length; i++) {
+        const prev = rCols[i - 1];
+        const cur = rCols[i];
+        if (prev.x + prev.w - cur.x > 0.015) {
+          validationIssues.push({
+            code: 'T004',
+            level: 'warn',
+            message: `列「${prev.field}」与「${cur.field}」横向重叠，建议微调宽度`,
+            target: { kind: 'col', id: cur.id },
+          });
+          break;
+        }
+      }
+    }
+  }
+
   const handleSlotChange = (slot: PageSlot) => {
     if (!currentRegion) return;
     commitHistory();
@@ -727,7 +880,7 @@ export function AnnotatePage() {
           </div>
           <div className="ann-top-actions">
             {editingTaskId && (
-              <Button size="sm" variant="ghost" onClick={() => navigate(`/bank/tasks/${editingTaskId}`)}>
+              <Button size="sm" variant="ghost" onClick={() => navigate(`/bank/report/${editingTaskId}`)}>
                 返回任务 #{editingTaskId} 报告
               </Button>
             )}
@@ -820,23 +973,55 @@ export function AnnotatePage() {
             onError={setError}
             onSpreadAt={handleSpreadAt}
           />
-          <PreviewDrawer preview={preview} onClose={() => setPreview(null)} />
+          <PreviewDrawer
+            preview={preview}
+            onClose={() => setPreview(null)}
+            onSwapAmountBalance={handleSwapAmountBalance}
+          />
         </div>
 
         <StepSidebar
           samples={samples}
           tasks={tasks}
+          templates={templates}
           sourceMode={source.mode}
           sourceLabel={source.label}
-          onSelectSample={(name) => loadSampleSource(name, false)}
-          onSelectFile={(file) => loadBlobSource(file, file.name, 'file', file.name, password || undefined, false, 0)}
+          onSelectSample={(name) => loadSampleSource(name, keepLayoutOnUpload && (columns.length > 0 || singles.length > 0))}
+          onSelectFile={(file) => void handleUploadFileSource(file)}
           onSelectTask={handleSelectTaskSource}
+          onSelectTemplate={(tid) => void loadTemplateById(tid)}
+          keepLayoutOnUpload={keepLayoutOnUpload}
+          onToggleKeepLayout={setKeepLayoutOnUpload}
+          onAnalyzeFields={(s, h) => void handleAnalyzeFieldsInCanvas(s, h)}
           needPassword={needPassword}
           password={password}
           onPasswordChange={setPassword}
           onRetryWithPassword={() => {
+            const pZip = pendingZipRef.current;
+            if (pZip) {
+              if (pZip.attempts >= 3) {
+                setError('压缩包口令连续输错 3 次，已停止解压；请核对客户口令后重选文件。');
+                pendingZipRef.current = null;
+                return;
+              }
+              extractStatement(pZip.file, password)
+                .then((out) => {
+                  if (out.status === 'wrong-password' || out.status === 'need-password') {
+                    pZip.attempts += 1;
+                    setError(`口令不正确（已尝试 ${pZip.attempts}/3 次），请重试。`);
+                    return;
+                  }
+                  pendingZipRef.current = null;
+                  setNeedPassword(false);
+                  const preserve = keepLayoutOnUpload && (columns.length > 0 || singles.length > 0);
+                  void loadBlobSource(out.blob, out.name, 'file', `${pZip.file.name} › ${out.name}`, undefined, preserve, 0);
+                })
+                .catch((e) => setError((e as Error).message || '解压失败'));
+              return;
+            }
             if (source.blob) {
-              loadBlobSource(source.blob, source.fileName, source.mode === 'sample' ? 'file' : source.mode, source.label, password, false, pageIndex);
+              const preserve = keepLayoutOnUpload && (columns.length > 0 || singles.length > 0);
+              void loadBlobSource(source.blob, source.fileName, source.mode === 'sample' ? 'file' : source.mode, source.label, password, preserve, pageIndex);
             }
           }}
           bankCode={bankCode}
@@ -887,6 +1072,7 @@ export function AnnotatePage() {
           onDryRun={handleDryRun}
           onSaveTemplate={handleSaveTemplate}
           onReparseTask={editingTaskId ? handleReparseTask : undefined}
+          validationIssues={validationIssues}
           editingTemplateId={editingTemplateId}
           editingTaskId={editingTaskId}
           isAdmin={isAdmin}

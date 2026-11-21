@@ -28,28 +28,6 @@ def canonical_field(name: str) -> str:
     key = str(name or "").strip()
     return FIELD_NAME_NORMALIZE.get(key, key)
 
-# 前后端字段别名归一化：新版画布写入 counterparty_name，解析核心统一为 counterparty
-FIELD_NAME_NORMALIZE: dict[str, str] = {
-    "counterparty_name": "counterparty",
-}
-
-
-def canonical_field(name: str) -> str:
-    """将前后端可能不一致的字段名归一化为解析内部标准名。"""
-    key = str(name or "").strip()
-    return FIELD_NAME_NORMALIZE.get(key, key)
-
-# 前后端字段别名归一化：新版画布写入 counterparty_name，解析核心统一为 counterparty
-FIELD_NAME_NORMALIZE: dict[str, str] = {
-    "counterparty_name": "counterparty",
-}
-
-
-def canonical_field(name: str) -> str:
-    """将前后端可能不一致的字段名归一化为解析内部标准名。"""
-    key = str(name or "").strip()
-    return FIELD_NAME_NORMALIZE.get(key, key)
-
 
 @dataclass(frozen=True)
 class Word:
@@ -172,7 +150,7 @@ def merge_tokens(line: Line, gap: float = 2.0) -> list[Word]:
 def find_header(
     lines: list[Line],
     field_map: dict[str, str | int] | None = None,
-    limit: int = 20,
+    limit: int = 30,
 ) -> tuple[Line, list[Word], dict[int, str]] | None:
     best: tuple[int, Line, list[Word], dict[int, str]] | None = None
     for line in lines[:limit]:
@@ -208,6 +186,11 @@ def apply_template(tokens: list[Word], mapping: dict[int, str], field_map: dict[
                 if _norm(token.text) == want:
                     idx = i
                     break
+            if idx is None and len(want) >= 2:
+                for i, token in enumerate(tokens):
+                    if want in _norm(token.text):
+                        idx = i
+                        break
         if idx is None:
             continue
         merged[idx] = canonical
@@ -301,6 +284,7 @@ def build_columns(tokens: list[Word], mapping: dict[int, str],
                 fallback.append((left + right) / 2)
             fallback.append(1e9)
             built: list[Column] = []
+            added: set[str] = set()
             for idx, raw_canonical in mapping.items():
                 canonical = canonical_field(raw_canonical)
                 c = by_field.get(canonical)
@@ -313,6 +297,14 @@ def build_columns(tokens: list[Word], mapping: dict[int, str],
                     hi = fallback[idx + 1] if idx + 1 < len(fallback) else 1e9
                     left, right = lo, hi
                 built.append(Column(field=canonical, left=left, right=right))
+                added.add(canonical)
+            for canonical, c in by_field.items():
+                if canonical in added or c.get("x") is None or not c.get("w"):
+                    continue
+                left = float(c["x"]) * width
+                right = left + float(c["w"]) * width
+                built.append(Column(field=canonical, left=left, right=right))
+                added.add(canonical)
             if built:
                 return built
 

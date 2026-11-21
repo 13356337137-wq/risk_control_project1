@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   analyzeTemplateFields,
   deleteTemplate,
@@ -18,27 +18,18 @@ import {
 } from '../../api/banker';
 import { getErrorMessage } from '../../api/errors';
 import { getUser } from '../../auth/store';
-import { bankLabel } from '../../components/annotate/types';
+import {
+  bankLabel,
+  BOX_COLORS,
+  buildBoxesFromAnalyzeResult,
+  DEFAULT_HEADER_FIELDS,
+  DEFAULT_SHORT_FIELDS,
+} from '../../components/annotate/types';
+import { PdfPageCanvas } from '../../components/PdfPageCanvas';
 import { Button } from '../../ui/Button';
 import { Notice } from '../../ui/Notice';
 
 type Tab = 'active' | 'draft' | 'disabled' | 'trash';
-
-const DEFAULT_SHORT_FIELDS: ShortFieldSpec[] = [
-  { field: 'account_no', label: '卡号/账号', keywords: '卡号,账号,银行卡号,客户账号,账户' },
-  { field: 'account_name', label: '户名', keywords: '户名,姓名,账户名,客户姓名,持卡人' },
-  { field: 'period', label: '起止日期', keywords: '起止日期,查询日期,交易区间,交易时段,明细周期' },
-  { field: 'bank_branch', label: '开户行', keywords: '开户行,开户网点,开户机构,网点' },
-  { field: 'currency', label: '币种', keywords: '币种,货币,钞汇' },
-];
-
-const DEFAULT_HEADER_FIELDS: HeaderFieldSpec[] = [
-  { field: 'txn_date', label: '交易日期', keywords: '交易日期,记账日期,交易时间,日期' },
-  { field: 'summary', label: '摘要', keywords: '摘要,交易摘要,附言,用途,交易类型' },
-  { field: 'amount', label: '交易金额', keywords: '交易金额,发生额,记账金额,金额,收入/支出' },
-  { field: 'balance', label: '账户余额', keywords: '账户余额,余额,联机余额,当前余额' },
-  { field: 'counterparty_name', label: '对方户名', keywords: '对方户名,对方账号与户名,对方姓名,对手信息,交易对手' },
-];
 
 const METHOD_LABEL: Record<string, string> = {
   inline: '同行粘连',
@@ -56,9 +47,13 @@ function statusLabel(row: TemplateRow) {
 
 export default function TemplatesPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const isAdmin = Boolean(getUser()?.is_admin);
   const [rows, setRows] = useState<TemplateRow[]>([]);
-  const [tab, setTab] = useState<Tab>('active');
+  const initTab = searchParams.get('tab');
+  const [tab, setTab] = useState<Tab>(
+    initTab === 'draft' || initTab === 'disabled' || initTab === 'trash' ? initTab : 'active',
+  );
   const [search, setSearch] = useState('');
   const [bankFilter, setBankFilter] = useState('');
   const [error, setError] = useState('');
@@ -72,6 +67,7 @@ export default function TemplatesPage() {
   // 智能字段分析建模板面板状态
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
   const [analyzeFile, setAnalyzeFile] = useState<File | null>(null);
+  const [analyzeFileBytes, setAnalyzeFileBytes] = useState<ArrayBuffer | null>(null);
   const [analyzeBankCode, setAnalyzeBankCode] = useState('');
   const [analyzePassword, setAnalyzePassword] = useState('');
   const [shortFields, setShortFields] = useState<ShortFieldSpec[]>(() =>
@@ -197,16 +193,19 @@ export default function TemplatesPage() {
     }
   }
 
-  async function onLoadBuiltin() {
+  async function onLoadBuiltin(force = false) {
     setBuiltinBusy(true);
     setError('');
     setNotice('');
     try {
-      const res = await loadBuiltinTemplates(isAdmin);
+      const res = await loadBuiltinTemplates(isAdmin, force);
       if (res.loaded.length === 0) {
-        setNotice(`内置标准模板（${res.skipped.join('、') || '工行/招行/建行'}）已在模板库中，无需重复载入。`);
+        setNotice(
+          `内置标准模板（${res.skipped.join('、') || '工行/招行/建行/农行/中行/广发'}）均已有在用或草稿版本；如需刷新覆盖旧版可点「重装内置模板」。`,
+        );
       } else {
-        setTab(isAdmin ? 'active' : 'draft');
+        const targetTab = res.loaded.some((x) => x.status === 'enabled') ? 'active' : 'draft';
+        setTab(targetTab);
         setNotice(`已载入 ${res.loaded.length} 份内置模板：${res.loaded.map((x) => `${x.bank_code} v${x.version}`).join('、')}。`);
       }
       load();
@@ -297,8 +296,17 @@ export default function TemplatesPage() {
           <Button size="sm" variant="ghost" onClick={() => navigate('/bank/annotate')}>
             + 画布新建标注
           </Button>
-          <Button size="sm" variant="ghost" disabled={builtinBusy} onClick={() => void onLoadBuiltin()}>
+          <Button size="sm" variant="ghost" disabled={builtinBusy} onClick={() => void onLoadBuiltin(false)}>
             {builtinBusy ? '载入中…' : '载入内置标准模板'}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={builtinBusy}
+            title="忽略已有版本强制生成新一版内置模板"
+            onClick={() => void onLoadBuiltin(true)}
+          >
+            重装内置模板
           </Button>
           <Button
             size="sm"
@@ -357,12 +365,17 @@ export default function TemplatesPage() {
             <div className="filters" style={{ flexWrap: 'wrap' }}>
               <input
                 type="file"
-                accept=".pdf,application/pdf"
+                accept=".pdf,application/pdf,image/png,image/jpeg,image/webp"
                 onChange={(e) => {
                   const f = e.target.files?.[0] ?? null;
                   setAnalyzeFile(f);
                   setAnalyzeResult(null);
                   setLastSavedTemplateId(null);
+                  if (f) {
+                    f.arrayBuffer().then(setAnalyzeFileBytes).catch(() => setAnalyzeFileBytes(null));
+                  } else {
+                    setAnalyzeFileBytes(null);
+                  }
                 }}
               />
               <input
@@ -564,7 +577,89 @@ export default function TemplatesPage() {
                   标题字段命中 {matchedHeaders.length}/{analyzeResult.header_results.length}
                 </span>
                 <span className="pill">试解析预览 {analyzeResult.preview_rows.length} 行</span>
+                {analyzeResult.engine && (
+                  <span className="pill">{analyzeResult.ocr_used ? `OCR (${analyzeResult.engine})` : analyzeResult.engine}</span>
+                )}
               </div>
+
+              {analyzeFileBytes && (() => {
+                const viz = buildBoxesFromAnalyzeResult(analyzeResult, shortFields, headerFields);
+                const pageRegs = viz.regions.filter((r) => r.page === 0);
+                const regIds = new Set(pageRegs.map((r) => r.id));
+                const pageCols = viz.columns.filter((c) => regIds.has(c.regionId));
+                const pageSingles = viz.singles.filter((s) => s.page === 0);
+                const refReg = pageRegs[0];
+                return (
+                  <details open>
+                    <summary className="small"><strong>版式框选可视化预览（首页叠框：青色短字段 + 紫色表格区 + 彩色列框）</strong></summary>
+                    <div className="ann-stage-wrap" style={{ marginTop: 8, maxHeight: 540, overflow: 'auto' }}>
+                      <PdfPageCanvas
+                        fileBytes={analyzeFileBytes}
+                        mimeHint={analyzeFile?.type || undefined}
+                        pageIndex={0}
+                        zoom={1.1}
+                        password={analyzePassword || undefined}
+                        overlay={
+                          <div className="ann-overlay" style={{ pointerEvents: 'none' }}>
+                            {pageRegs.map((r) => (
+                              <div key={r.id}>
+                                <div
+                                  className="ann-area-box"
+                                  style={{
+                                    left: `${r.area.x * 100}%`,
+                                    top: `${r.area.y * 100}%`,
+                                    width: `${r.area.w * 100}%`,
+                                    height: `${r.area.h * 100}%`,
+                                  }}
+                                />
+                                <div
+                                  className="ann-header-line"
+                                  style={{ left: `${r.area.x * 100}%`, width: `${r.area.w * 100}%`, top: `${r.headerY * 100}%` }}
+                                />
+                              </div>
+                            ))}
+                            {pageCols.map((c, idx) => {
+                              const color = BOX_COLORS[idx % BOX_COLORS.length];
+                              return (
+                                <div
+                                  key={c.id}
+                                  className="ann-col-box"
+                                  style={{
+                                    left: `${c.x * 100}%`,
+                                    width: `${c.w * 100}%`,
+                                    top: `${(refReg?.area.y ?? 0.16) * 100}%`,
+                                    height: `${(refReg?.area.h ?? 0.72) * 100}%`,
+                                    borderColor: color,
+                                    background: `${color}1e`,
+                                  }}
+                                >
+                                  <span className="ann-tag" style={{ background: color }}>
+                                    {c.label || c.field}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                            {pageSingles.map((s) => (
+                              <div
+                                key={s.id}
+                                className="ann-single-box"
+                                style={{
+                                  left: `${s.x * 100}%`,
+                                  top: `${s.y * 100}%`,
+                                  width: `${s.w * 100}%`,
+                                  height: `${s.h * 100}%`,
+                                }}
+                              >
+                                <span className="ann-tag single">{s.label}：{s.value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        }
+                      />
+                    </div>
+                  </details>
+                );
+              })()}
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 12 }}>
                 <div>

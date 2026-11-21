@@ -5,19 +5,29 @@ import { labelOf } from '../../lib/columns';
 type Props = {
   preview: TemplatePreview | null;
   onClose: () => void;
+  onSwapAmountBalance?: () => void;
 };
 
-export function PreviewDrawer({ preview, onClose }: Props) {
+export function PreviewDrawer({ preview, onClose, onSwapAmountBalance }: Props) {
   if (!preview) return null;
 
   const hasIssues = preview.missing_columns.length > 0 || preview.empty_columns.length > 0;
+  const mayNeedSwap = Boolean(
+    onSwapAmountBalance &&
+      (preview.warnings.some((w) => /余额|反转|倒置|相差较大/.test(w)) || preview.txn_count === 0),
+  );
   const meta = preview.meta || {};
-  const metaPairs = [
+  const extraMeta = preview.extra_meta || {};
+  const knownKeys = new Set(['account_no', 'account_name', 'bank_branch', 'account_type', 'currency', 'period_start', 'period_end']);
+  const metaPairs = ([
     ['卡号/账号', meta.account_no],
     ['户名', meta.account_name],
     ['开户行', meta.bank_branch],
     ['账户类型', meta.account_type],
-  ].filter(([, v]) => Boolean(v));
+    ['币种', meta.currency],
+    ['期初~期末', meta.period_start && meta.period_end ? `${meta.period_start} ~ ${meta.period_end}` : meta.period_start || meta.period_end],
+    ...Object.entries(extraMeta).filter(([k]) => !knownKeys.has(k)),
+  ] as [string, unknown][]).filter(([, v]) => Boolean(v));
 
   return (
     <section className="ann-preview-panel">
@@ -29,9 +39,16 @@ export function PreviewDrawer({ preview, onClose }: Props) {
             {hasIssues ? ' · 有缺漏提示' : ' · 核心字段完整'}
           </span>
         </div>
-        <Button size="sm" variant="ghost" onClick={onClose}>
-          收起试跑结果
-        </Button>
+        <div className="filters">
+          {mayNeedSwap && onSwapAmountBalance && (
+            <Button size="sm" variant="secondary" onClick={onSwapAmountBalance}>
+              对调金额与余额列重试
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            收起试跑结果
+          </Button>
+        </div>
       </div>
 
       {hasIssues && (
@@ -59,7 +76,7 @@ export function PreviewDrawer({ preview, onClose }: Props) {
         <div className="ann-meta-chips">
           {metaPairs.map(([k, v]) => (
             <span key={String(k)} className="ann-meta-chip">
-              {k}：<b>{v}</b>
+              {String(k)}：<b>{String(v)}</b>
             </span>
           ))}
         </div>

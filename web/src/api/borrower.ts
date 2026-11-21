@@ -16,6 +16,8 @@ export type TaskDetail = {
   period_start: string | null;
   period_end: string | null;
   failure_code: string | null;
+  consent_version?: string | null;
+  consent_at?: string | null;
   created_at: string | null;
 };
 
@@ -49,10 +51,18 @@ export type BorrowerTaskItem = {
   bank_name: string | null;
   period_start: string | null;
   period_end: string | null;
+  consent_version?: string | null;
+  consent_at?: string | null;
 };
 
 export function listMyTasks(limit = 50): Promise<{ items: BorrowerTaskItem[]; total: number }> {
   return request<{ items: BorrowerTaskItem[]; total: number }>('/tasks?limit=' + limit);
+}
+
+export function withdrawConsent(taskId: number): Promise<{ task_id: number; withdrawn: boolean; deleted_at: string }> {
+  return request<{ task_id: number; withdrawn: boolean; deleted_at: string }>('/tasks/' + taskId + '/withdraw', {
+    method: 'POST',
+  });
 }
 
 export function supplementTask(taskId: number, file: File): Promise<{ task_id: number; status: string }> {

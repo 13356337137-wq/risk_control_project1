@@ -73,9 +73,25 @@ export default function OcrRoutingPage() {
         disabled={!isAdmin}
         onChange={(event) => setConfig({ ...config, workers: Number(event.target.value) })}
       />
+      {config.workers > 2 ? (
+        <p className="pill warn" style={{ marginTop: 6 }}>
+          并发数建议不超过 2，过高并发易触发本地 RapidOCR CPU 争用或云端限流。
+        </p>
+      ) : null}
       <p className="small muted" style={{ marginTop: 8 }}>
         凭据状态：{config.credential_ready ? '已就绪（可开启云端路由）' : '未就绪（请填写 API Key 后保存）'}
       </p>
+      <section style={{ marginTop: 16 }}>
+        <h3>本地 vs 云端路由分流策略</h3>
+        <table className="grid compact">
+          <thead><tr><th>条件</th><th>路由去向</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>电子 PDF（含文本层）</td><td>本地解析 + PyMuPDF 版式</td><td>零网络出域、毫秒级精度最高</td></tr>
+            <tr><td>扫描件 / 图片 &lt; {config.min_images} 张</td><td>本地 RapidOCR 引擎</td><td>单机内网离线完成识字与坐标对齐</td></tr>
+            <tr><td>图片 ≥ {config.min_images} 张且已启用云端</td><td>云端视觉 OCR（并发 {config.workers}）</td><td>大批次多页拍照件加速识别</td></tr>
+          </tbody>
+        </table>
+      </section>
       {config.enabled ? (
         <>
           <Field

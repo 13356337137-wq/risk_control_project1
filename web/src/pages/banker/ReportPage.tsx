@@ -1,19 +1,31 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  createApproval,
+  exportPrintableReport,
+  getBankTask,
+  getMetricDefinitions,
   getReport,
-  getTaskExportBlob,
+  getTaskExportWithMeta,
   getTaskFile,
   getTransactions,
+  getVerificationDefinitions,
+  listTemplates,
+  reanalyzeTask,
   verifyTask,
   whitelistTask,
+  type MetricDef,
   type ReportPayload,
+  type TaskBankDetail,
+  type TemplateRow,
   type TxnRow,
 } from '../../api/banker';
 import { getErrorMessage } from '../../api/errors';
 import { getUser } from '../../auth/store';
+import { CheckTable } from '../../components/CheckTable';
+import { MetricExplain } from '../../components/MetricExplain';
 import { PdfPageCanvas, type PageRenderSize } from '../../components/PdfPageCanvas';
-import { AmountHistogram, Bar, DomainRadar, MonthlyFlow } from '../../components/ReportCharts';
+import { AmountHistogram, Bar, DomainRadar, InsightSection, MonthlyFlow } from '../../components/ReportCharts';
 import { Button } from '../../ui/Button';
 import { Notice } from '../../ui/Notice';
 
@@ -122,6 +134,33 @@ function checkStatusBadge(status?: string) {
   }
 }
 
+const APPROVAL_LABEL: Record<string, { label: string; cls: string }> = {
+  approve: { label: '建议通过', cls: 'pill ok' },
+  reject: { label: '建议拒绝', cls: 'pill err' },
+  supplement: { label: '补充资料', cls: 'pill warn' },
+  hold: { label: '暂缓/转人工复议', cls: 'pill warn' },
+};
+
+function buildNarrative(report: ReportPayload): string {
+  const trustScore = report.trust?.score;
+  const overall = report.scores?.overall;
+  const limitations = report.limitations?.length ?? 0;
+  const parts = [`综合结论为「${report.verdict}」（${report.verdict_reason}）。`];
+  if (typeof trustScore === 'number') {
+    parts.push(`四层真实性得分 ${trustScore}（${report.trust?.label || '—'}）。`);
+  }
+  if (typeof overall === 'number') {
+    parts.push(`五维综合信用评分 ${overall}（${report.scores?.grade_label || report.scores?.grade || '—'}）。`);
+  }
+  if (report.conclusions?.length) {
+    parts.push(`命中风险/提示结论 ${report.conclusions.length} 条。`);
+  }
+  if (limitations > 0) {
+    parts.push(`存在 ${limitations} 项核验受限说明，审贷前建议核阅。`);
+  }
+  return parts.join('');
+}
+
 export default function ReportPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -129,6 +168,11 @@ export default function ReportPage() {
   const isAdmin = Boolean(getUser()?.is_admin);
 
   const [report, setReport] = useState<ReportPayload | null>(null);
+  const [taskMeta, setTaskMeta] = useState<TaskBankDetail | null>(null);
+  const [metricDefs, setMetricDefs] = useState<Record<string, MetricDef>>({});
+  const [checkMethods, setCheckMethods] = useState<Record<string, string>>({});
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [tab, setTab] = useState<Tab>('summary');
@@ -155,17 +199,33 @@ export default function ReportPage() {
   const [docPasswordWrong, setDocPasswordWrong] = useState(false);
   const [docRenderError, setDocRenderError] = useState('');
 
-  // 加白 & 复核状态
+  // 加白、复核与审批意见状态
   const [whitelistOpen, setWhitelistOpen] = useState(false);
   const [whitelistReason, setWhitelistReason] = useState('');
+  const [approvalDecision, setApprovalDecision] = useState<'approve' | 'reject' | 'supplement' | 'hold'>('approve');
+  const [approvalComment, setApprovalComment] = useState('');
   const [actionBusy, setActionBusy] = useState(false);
 
   const PAGE = 100;
 
   const loadReport = useCallback(() => {
-    getReport(taskId)
-      .then((data) => {
-        setReport(data);
+    Promise.all([
+      getReport(taskId),
+      getBankTask(taskId).catch(() => null),
+      getMetricDefinitions().catch(() => ({ items: [] as MetricDef[] })),
+      getVerificationDefinitions().catch(() => ({ items: [] as { code: string; method: string }[] })),
+      listTemplates().catch(() => [] as TemplateRow[]),
+    ])
+      .then(([rep, taskData, defsData, verData, tplList]) => {
+        setReport(rep);
+        if (taskData) setTaskMeta(taskData);
+        const dMap: Record<string, MetricDef> = {};
+        for (const d of defsData.items || []) dMap[d.code] = d;
+        setMetricDefs(dMap);
+        const mMap: Record<string, string> = {};
+        for (const v of verData.items || []) mMap[v.code] = v.method;
+        setCheckMethods(mMap);
+        setTemplates(tplList.filter((t) => t.status === 'enabled'));
         setError('');
       })
       .catch((err) => setError(getErrorMessage(err, 'banker')));
@@ -176,15 +236,15 @@ export default function ReportPage() {
   }, [loadReport]);
 
   useEffect(() => {
-    if (tab !== 'txns' || txns) return;
+    if (txns) return;
     let alive = true;
     getTransactions(taskId)
       .then((rows) => alive && setTxns(rows))
-      .catch((err) => alive && setError(getErrorMessage(err, 'banker')));
+      .catch(() => undefined);
     return () => {
       alive = false;
     };
-  }, [tab, taskId, txns]);
+  }, [taskId, txns]);
 
   const openOriginalAt = async (pageNo = 1, x?: number, y?: number, label?: string) => {
     setDrawerOpen(true);
@@ -203,17 +263,54 @@ export default function ReportPage() {
     }
   };
 
-  const handleExport = async (fmt: 'json' | 'csv') => {
+  const handleExport = async (fmt: 'json' | 'csv' | 'html') => {
     try {
-      const blob = await getTaskExportBlob(taskId, fmt);
+      const { blob, filename } =
+        fmt === 'html' ? await exportPrintableReport(taskId) : await getTaskExportWithMeta(taskId, fmt);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `task-${taskId}.${fmt === 'json' ? 'json' : 'csv'}`;
+      a.download = filename || `task-${taskId}.${fmt}`;
       a.click();
       URL.revokeObjectURL(url);
+      if (fmt === 'html') setNotice('已导出带水印的核验报告，请查收下载文件。');
     } catch (err) {
       setError(getErrorMessage(err, 'banker'));
+    }
+  };
+
+  const handleReanalyzeWithTemplate = async () => {
+    const tid = Number(selectedTemplateId);
+    if (!tid) return;
+    setActionBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await reanalyzeTask(taskId, { templateId: tid });
+      setNotice(`已指定模板 #${tid} 重解析完成，正在刷新报告…`);
+      setTxns(null);
+      loadReport();
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleApprovalSubmit = async () => {
+    if (!approvalComment.trim()) return;
+    setActionBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await createApproval(taskId, { decision: approvalDecision, comment: approvalComment.trim() });
+      setApprovalComment('');
+      setNotice('审批意见已归档并绑定当前报告版本。');
+      loadReport();
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -276,6 +373,16 @@ export default function ReportPage() {
     );
   }, [txns, keyword]);
 
+  const metricThresholdHints = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of report?.conclusions || []) {
+      if (c.threshold !== undefined && c.threshold !== null) {
+        map[c.code] = `触发阈值 ${c.threshold}（实测 ${c.value ?? '—'}）`;
+      }
+    }
+    return map;
+  }, [report?.conclusions]);
+
   if (error && !report) {
     return (
       <div className="panel wide">
@@ -284,6 +391,9 @@ export default function ReportPage() {
       </div>
     );
   }
+
+  // 两个提前返回都在所有 hook 之后：hook 数随渲染变化会让 React 报
+  // 「change in the order of Hooks」并整页白屏（广发样例就是这么白掉的）
   if (!report) return <p className="muted">加载中…</p>;
 
   const trustScore = report.trust?.score;
@@ -296,13 +406,21 @@ export default function ReportPage() {
     ? (report.custom_field_stats as CustomStatItem[])
     : [];
   const layers = (report.layers ?? []) as LayerWithChecks[];
-  const hasTemplateMismatch = (report.limitations ?? []).some((l) =>
-    /模板缺列|解析不完整|模板|临时标注/.test(l),
-  );
+  const hasTemplateMismatch =
+    (report.limitations ?? []).some((l) => /模板缺列|解析不完整|模板|临时标注/.test(l)) ||
+    Boolean(taskMeta?.check_result?.template_mismatch);
   const vetoChecks = layers.flatMap((l) =>
     (l.checks ?? []).filter((c) => ['C1', 'C2', 'C3'].includes(String(c.code || '')) && (c.status === 'fail' || c.status === 'inconsistent')),
   );
   const inTrash = Boolean((report as unknown as { in_trash?: boolean }).in_trash);
+  const preread = taskMeta?.check_result?.preread as Record<string, unknown> | undefined;
+  const matchedTpl =
+    taskMeta?.check_result?.matched_template || taskMeta?.check_result?.template_match || null;
+  const whitelistInfo = taskMeta?.check_result?.whitelist || null;
+  const headerMeta = (report.header_meta || taskMeta?.check_result?.header_meta || {}) as Record<string, unknown>;
+  const extraHeaderFields = (headerMeta.extra_fields && typeof headerMeta.extra_fields === 'object'
+    ? headerMeta.extra_fields
+    : {}) as Record<string, unknown>;
 
   return (
     <div className="panel wide">
@@ -337,10 +455,17 @@ export default function ReportPage() {
               导出明细 CSV
             </Button>
           )}
+          <Button size="sm" variant="ghost" disabled={actionBusy} onClick={() => void handleExport('html')}>
+            导出带水印报告
+          </Button>
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setViewMode((m) => (m === 'brief' ? 'detail' : 'brief'))}
+            onClick={() => {
+              const next = viewMode === 'brief' ? 'detail' : 'brief';
+              setViewMode(next);
+              if (next === 'brief') setTab('summary');
+            }}
           >
             {viewMode === 'brief' ? '切换明细版' : '切换结论版'}
           </Button>
@@ -373,17 +498,48 @@ export default function ReportPage() {
           请重点核查余额链/页合计/笔数一致性后再作授信决策。
         </div>
       )}
+      {whitelistInfo && (
+        <div className="alert ok" style={{ borderLeft: '4px solid #16a34a', background: '#f0fdf4', padding: '10px 14px', marginBottom: 12 }}>
+          <strong>人工核实已加白：</strong>
+          {whitelistInfo.reason || '已确认真实有效'}
+          {whitelistInfo.at ? <span className="muted small" style={{ marginLeft: 8 }}>（{whitelistInfo.at}）</span> : null}
+        </div>
+      )}
       {hasTemplateMismatch && (
         <div className="alert warn no-print">
-          检测到该任务存在「解析不完整 / 模板缺列 / 版式未命中」提示，建议点击右侧按钮在画布中直接修正框选并重解析：
-          <button
-            type="button"
-            className="link-btn"
-            style={{ marginLeft: 10 }}
-            onClick={() => navigate('/bank/annotate?taskId=' + taskId)}
-          >
-            打开标注工作台 ›
-          </button>
+          <div className="row-between">
+            <span>
+              检测到该任务存在「解析不完整 / 模板缺列 / 版式未命中」提示，可直接指定已有模板重解析或前往画布调框：
+            </span>
+            <div className="filters">
+              <select
+                value={selectedTemplateId}
+                onChange={(e) => setSelectedTemplateId(e.target.value)}
+                aria-label="指定模板重解析"
+              >
+                <option value="">选择启用模板…</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={String(t.id)}>
+                    {t.bank_code} v{t.version} (#{t.id})
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                disabled={actionBusy || !selectedTemplateId}
+                onClick={() => void handleReanalyzeWithTemplate()}
+              >
+                用所选模板重解析
+              </Button>
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => navigate('/bank/annotate?taskId=' + taskId)}
+              >
+                打开标注工作台 ›
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -431,6 +587,69 @@ export default function ReportPage() {
 
       {tab === 'summary' ? (
         <>
+          {(preread || matchedTpl || Object.keys(headerMeta).length > 0 || taskMeta?.consent_version) && (
+            <div className="preread-card">
+              <div className="row-between">
+                <h3>原件识别、模板归因与表头摘要</h3>
+                <span className="muted small">
+                  报告版本 v{report.version ?? 1}
+                  {taskMeta?.consent_version ? ` · 借款人授权 ${taskMeta.consent_version}` : ''}
+                </span>
+              </div>
+              <div className="me-grid" style={{ marginTop: 6 }}>
+                <div>
+                  <span className="me-k">模板匹配</span>
+                  <span className="me-v">
+                    {matchedTpl
+                      ? `${(matchedTpl as { bank_code?: string }).bank_code || taskMeta?.carrier || '—'} #${(matchedTpl as { template_id?: number; id?: number }).template_id ?? (matchedTpl as { id?: number }).id ?? '—'}（方式：${(matchedTpl as { by?: string }).by || '自动'}）`
+                      : '默认规则 / 未绑定特定模板'}
+                  </span>
+                </div>
+                {preread ? (
+                  <div>
+                    <span className="me-k">预读诊断</span>
+                    <span className="me-v">
+                      {String(preread.pages ?? '—')} 页 ·
+                      {preread.has_text === false ? ' 扫描/图片件' : ' 文本层清晰'}
+                      {preread.bank_guess ? ` · 银行猜测 ${String(preread.bank_guess)}` : ''}
+                    </span>
+                  </div>
+                ) : null}
+                {headerMeta.bank_branch ? (
+                  <div>
+                    <span className="me-k">开户网点</span>
+                    <span className="me-v">{String(headerMeta.bank_branch)}</span>
+                  </div>
+                ) : null}
+                {headerMeta.currency ? (
+                  <div>
+                    <span className="me-k">交易币种</span>
+                    <span className="me-v">{String(headerMeta.currency)}</span>
+                  </div>
+                ) : null}
+                {headerMeta.account_no ? (
+                  <div>
+                    <span className="me-k">账号</span>
+                    <span className="me-v mono">{String(headerMeta.account_no)}</span>
+                  </div>
+                ) : null}
+                {Object.entries(extraHeaderFields).map(([k, v]) => (
+                  <div key={k}>
+                    <span className="me-k">{k}</span>
+                    <span className="me-v">{String(v ?? '—')}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {viewMode === 'brief' && (
+            <div className="summary-panel">
+              <h3>结论摘要视图（可直接打印交付审贷会）</h3>
+              <p>{buildNarrative(report)}</p>
+            </div>
+          )}
+
           <section>
             <h2>四层得分仪表</h2>
             <div className="gauge-row">
@@ -501,6 +720,8 @@ export default function ReportPage() {
             </section>
           ) : null}
 
+          {txns && txns.length > 0 && viewMode === 'detail' ? <InsightSection txns={txns} /> : null}
+
           {customStats.length > 0 && (
             <section>
               <h2>模板自定义扩展字段汇总</h2>
@@ -531,11 +752,72 @@ export default function ReportPage() {
                       {item.code}
                     </span>{' '}
                     {item.message}
+                    {item.value !== undefined && item.value !== null ? (
+                      <span className="muted small" style={{ marginLeft: 8 }}>
+                        [实测 {String(item.value)}
+                        {item.threshold !== undefined && item.threshold !== null ? ` / 阈值 ${String(item.threshold)}` : ''}]
+                      </span>
+                    ) : null}
                   </li>
                 ))}
               </ul>
             </section>
           ) : null}
+
+          <section className="approval-box no-print" style={{ marginTop: 14 }}>
+            <div className="row-between">
+              <h3>审贷批复与审批意见留痕（绑定报告 v{report.version ?? 1}）</h3>
+            </div>
+            <div className="try-row" style={{ marginBottom: 10 }}>
+              <select
+                value={approvalDecision}
+                onChange={(e) => setApprovalDecision(e.target.value as 'approve' | 'reject' | 'supplement' | 'hold')}
+                aria-label="审批结论"
+              >
+                <option value="approve">建议通过</option>
+                <option value="supplement">补充资料</option>
+                <option value="hold">暂缓/转人工复议</option>
+                <option value="reject">建议拒绝</option>
+              </select>
+              <input
+                type="text"
+                style={{ flex: 1 }}
+                placeholder="填写审贷意见、风险缓释条件或退回原因…"
+                value={approvalComment}
+                onChange={(e) => setApprovalComment(e.target.value)}
+              />
+              <Button
+                size="sm"
+                disabled={actionBusy || !approvalComment.trim()}
+                onClick={() => void handleApprovalSubmit()}
+              >
+                提交审批意见
+              </Button>
+            </div>
+            {report.approvals && report.approvals.length > 0 ? (
+              <table className="grid compact">
+                <thead>
+                  <tr><th>时间</th><th>审批人</th><th>结论</th><th>报告版本</th><th>意见内容</th></tr>
+                </thead>
+                <tbody>
+                  {report.approvals.map((a) => {
+                    const meta = APPROVAL_LABEL[a.decision] ?? { label: a.decision, cls: 'pill' };
+                    return (
+                      <tr key={a.id}>
+                        <td className="small muted">{a.created_at || '—'}</td>
+                        <td className="small">{a.actor_name}</td>
+                        <td><span className={meta.cls}>{meta.label}</span></td>
+                        <td className="small muted">v{a.report_version}</td>
+                        <td className="small">{a.comment}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <p className="muted small">当前报告版本暂无人工审批批复意见。</p>
+            )}
+          </section>
 
           {report.limitations?.length ? (
             <section>
@@ -558,22 +840,9 @@ export default function ReportPage() {
               </h3>
               <p className="small muted">{layer.detail}</p>
               {layer.checks && layer.checks.length > 0 && (
-                <table className="grid compact" style={{ marginTop: 8 }}>
-                  <thead><tr><th>编号</th><th>核验项</th><th>状态</th><th>结果说明</th></tr></thead>
-                  <tbody>
-                    {layer.checks.map((ck, idx) => {
-                      const b = checkStatusBadge(ck.status);
-                      return (
-                        <tr key={ck.code || idx}>
-                          <td className="mono small">{ck.code || '—'}</td>
-                          <td>{ck.name || ck.method || '—'}</td>
-                          <td><span className={b.cls}>{b.label}</span></td>
-                          <td className="small muted">{ck.detail || '—'}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <div style={{ marginTop: 8 }}>
+                  <CheckTable items={layer.checks} methods={checkMethods} />
+                </div>
               )}
             </div>
           ))}
@@ -658,17 +927,13 @@ export default function ReportPage() {
                         {open ? (
                           <tr className="metric-detail">
                             <td colSpan={5}>
-                              <div className="metric-detail-box">
-                                <dl>
-                                  <dt>口径说明</dt>
-                                  <dd>{metric.note || '—'}</dd>
-                                  <dt>本次测算</dt>
-                                  <dd>{metric.value === null ? '不可算（缺必需列或本期无此类交易）' : metric.value + ' ' + metric.unit}</dd>
-                                  <dt>口径版本</dt>
-                                  <dd>{metric.caliber_version ?? '—'}</dd>
-                                </dl>
-                                <Link className="link-btn" to="/bank/glossary">查看标准口径词典</Link>
-                              </div>
+                              <MetricExplain
+                                metric={metric}
+                                def={metricDefs[metric.code]}
+                                trend={report.trend}
+                                txns={txns}
+                                thresholdHint={metricThresholdHints[metric.code] ?? null}
+                              />
                             </td>
                           </tr>
                         ) : null}

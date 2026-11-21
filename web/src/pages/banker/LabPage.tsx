@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  computeFileFeatures,
   deleteCustom,
   evaluate,
   evaluateCode,
@@ -8,6 +9,7 @@ import {
   listOperators,
   listSamples,
   saveCustom,
+  type ComputeFileResult,
   type CustomFeature,
   type EvaluateResult,
   type LabFeature,
@@ -40,26 +42,32 @@ const COLUMNS = [
   { name: 'dow', note: '星期（0 = 周一）' },
 ];
 
-const CURL_EXAMPLE = `curl -X POST http://127.0.0.1:8020/api/v1/features/compute \
-  -H "Content-Type: application/json" \
-  -d '{"codes":["f_txn_count","f_in_total"],"rows":[{"txn_date":"2026-01-05","amount":"1000","direction":"in"}]}'`;
+const CURL_EXAMPLE = `curl -X POST http://127.0.0.1:8010/api/v1/features/compute \\
+  -H "Authorization: Bearer <TOKEN>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"codes":["f_txn_count","f_in_total","f_debt_service_ratio"],"rows":[{"txn_date":"2026-01-05","amount":"1000","direction":"in"}]}'`;
 
 const NOTES = [
   "聚合要带 where：count(where=direction=='out')，不写 where 就是全部行。",
   "文本要用引号：in_lexicon(name='salary')、contains(word='工资')。",
   "产出是一列数的算子（zscore / pct_rank / in_hours / contains）要跟比较或聚合搭配：count(where=zscore() > 3)。",
+  "时间衍生字段 hour / month / dow 可直接引用：count(where=hour>=22) / count()。",
   "缺列不报 0，返回空值 + 原因；报告里会写成「不可算」，不会悄悄算成 0。",
 ];
 
 const EXAMPLES = [
   { label: '出账总额', expr: "sum(amount, where=direction=='out')" },
   { label: '月均出账', expr: 'sum(amount) / coverage_months()' },
-  { label: '开方', expr: 'sqrt(sum(amount, where=direction==\'out\'))' },
+  { label: '开方', expr: "sqrt(sum(amount, where=direction=='out'))" },
   { label: '平方', expr: "pow(sum(amount, where=direction=='in') / 1000, 2)" },
-  { label: '对数', expr: 'log10(sum(amount, where=direction==\'out\'))' },
-  { label: '夜间占比', expr: "count(where=hour(trade_time)>=22) / count()" },
-  { label: '月度序列积分', expr: 'integrate(monthly_values(agg=\'count\'))' },
-  { label: '月度序列微分', expr: 'derivative(monthly_values(agg=\'count\'))' },
+  { label: '对数', expr: "log10(sum(amount, where=direction=='out'))" },
+  { label: '夜间占比', expr: 'count(where=hour>=22) / count()' },
+  { label: '工资入账占比', expr: "sum(amount, where=(direction=='in') & in_lexicon(name='salary')) / sum(amount, where=direction=='in')" },
+  { label: '网贷出账占比', expr: "sum(amount, where=(direction=='out') & in_lexicon(name='online_loan')) / sum(amount, where=direction=='out')" },
+  { label: '大额异常笔数', expr: 'count(where=robust_zscore() > 3)' },
+  { label: '对手集中度 HHI', expr: "share_square_sum(by='counterparty_name')" },
+  { label: '月度序列积分', expr: "integrate(monthly_values(agg='count'))" },
+  { label: '月度序列微分', expr: "derivative(monthly_values(agg='count'))" },
   { label: '条件判断', expr: "if_else(sum(amount, where=direction=='in') > 10000, '高收入', '普通')" },
 ];
 
@@ -80,6 +88,7 @@ export default function LabPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
   const [tab, setTab] = useState<'features' | 'operators' | 'custom'>('features');
   const [custom, setCustom] = useState<CustomFeature[]>([]);
   const [saveCode, setSaveCode] = useState('');
@@ -87,6 +96,10 @@ export default function LabPage() {
   const [saveUnit, setSaveUnit] = useState('');
   const [saveNote, setSaveNote] = useState('');
   const [activeOp, setActiveOp] = useState<LabOperator | null>(null);
+  const [activeFeat, setActiveFeat] = useState<LabFeature | null>(null);
+  const [fileBusy, setFileBusy] = useState(false);
+  const [fileResult, setFileResult] = useState<ComputeFileResult | null>(null);
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
 
   const reloadCustom = () => {
     listCustom()
@@ -118,11 +131,26 @@ export default function LabPage() {
     return out;
   }, [operators, filter]);
 
-  void filter;
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    for (const item of features) {
+      set.add(item.category || '基础统计');
+    }
+    return ['all', ...Array.from(set)];
+  }, [features]);
 
-  const shownFeatures = features.filter(
-    (item) => !filter.trim() || item.code.includes(filter.trim()) || item.name.includes(filter.trim()),
-  );
+  const shownFeatures = useMemo(() => {
+    const keyword = filter.trim().toLowerCase();
+    return features.filter((item) => {
+      if (categoryFilter !== 'all' && (item.category || '基础统计') !== categoryFilter) return false;
+      if (!keyword) return true;
+      return (
+        item.code.toLowerCase().includes(keyword) ||
+        item.name.toLowerCase().includes(keyword) ||
+        (item.description || '').toLowerCase().includes(keyword)
+      );
+    });
+  }, [features, filter, categoryFilter]);
 
   async function run() {
     setBusy(true);
@@ -134,6 +162,20 @@ export default function LabPage() {
       setError(getErrorMessage(err, 'banker'));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function runAllOnPdf(file: File) {
+    setFileBusy(true);
+    setError('');
+    try {
+      const res = await computeFileFeatures(file, file.name);
+      setFileResult(res);
+    } catch (err) {
+      setFileResult(null);
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setFileBusy(false);
     }
   }
 
@@ -181,10 +223,23 @@ export default function LabPage() {
           </div>
           <input
             className="search lab-search"
-            placeholder={tab === 'features' ? '搜索特征' : tab === 'operators' ? '搜索算子' : '搜索自定义特征'}
+            placeholder={tab === 'features' ? '搜索特征（代码/名称/说明）' : tab === 'operators' ? '搜索算子' : '搜索自定义特征'}
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
           />
+          {tab === 'features' ? (
+            <select
+              className="search lab-search"
+              value={categoryFilter}
+              onChange={(event) => setCategoryFilter(event.target.value)}
+              aria-label="特征分类筛选"
+            >
+              <option value="all">全部分类（{features.length}）</option>
+              {categories.filter((c) => c !== 'all').map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+          ) : null}
 
           <div className="lab-list">
             {tab === 'custom' ? (
@@ -227,13 +282,20 @@ export default function LabPage() {
               ? shownFeatures.map((item) => (
                   <button
                     key={item.code}
-                    className="lab-item"
-                    onClick={() => setExpr(String(item.body))}
-                    title="点击填入表达式"
+                    className={'lab-item' + (activeFeat?.code === item.code ? ' active' : '')}
+                    onClick={() => {
+                      setActiveFeat(item);
+                      setActiveOp(null);
+                      setExpr(String(item.body));
+                    }}
+                    title={item.description || '点击填入表达式'}
                   >
                     <span className="lab-code">{item.code}</span>
-                    <span className="lab-name">{item.name}</span>
-                    <span className="muted small">{item.unit}</span>
+                    <span className="lab-name">
+                      {item.name}
+                      {item.category ? <span className="muted small"> · {item.category}</span> : null}
+                    </span>
+                    <span className="muted small">{item.unit || '—'}</span>
                   </button>
                 ))
               : Object.entries(grouped).map(([family, items]) => (
@@ -266,7 +328,25 @@ export default function LabPage() {
               ))}
             </select>
             <Button onClick={() => void run()} disabled={busy}>
-              {busy ? '计算中…' : '运行'}
+              {busy ? '计算中…' : '运行单条表达式'}
+            </Button>
+            <input
+              ref={pdfInputRef}
+              type="file"
+              accept=".pdf"
+              style={{ display: 'none' }}
+              onChange={(event) => {
+                const f = event.target.files?.[0];
+                event.target.value = '';
+                if (f) void runAllOnPdf(f);
+              }}
+            />
+            <Button
+              variant="ghost"
+              onClick={() => pdfInputRef.current?.click()}
+              disabled={fileBusy}
+            >
+              {fileBusy ? '正在解析并批量试算…' : '上传 PDF 批量试算全部特征'}
             </Button>
           </div>
 
@@ -320,10 +400,19 @@ export default function LabPage() {
                 )}
                 <p className="muted small">函数签名：<code>{signature(activeOp)}</code></p>
               </div>
+            ) : activeFeat ? (
+              <div className="lab-guide-block">
+                <span className="lab-guide-title">
+                  {activeFeat.code} · {activeFeat.name}
+                  {activeFeat.category ? `（${activeFeat.category}）` : ''}
+                </span>
+                <p className="small muted">{activeFeat.description || '内置衍生特征，已在左侧点击填入表达式编辑器，可直接点「运行单条表达式」试算。'}</p>
+                <p className="small muted">单位：{activeFeat.unit || '—'} · 形式：{activeFeat.form} · 版本：{activeFeat.version || 'v1'}</p>
+              </div>
             ) : (
               <div className="lab-guide-block">
                 <span className="lab-guide-title">用法</span>
-                <p className="muted small">点左边任意算子，这里会列出它的参数与签名。</p>
+                <p className="muted small">点左边任意内置特征或算子，这里会列出业务含义、参数与签名。</p>
               </div>
             )}
 
@@ -389,6 +478,41 @@ export default function LabPage() {
           ) : (
             <p className="muted small">输入表达式后点运行。缺列的算子会返回空值并给出原因，不会填 0。</p>
           )}
+
+          {fileResult ? (
+            <div className="card" style={{ marginTop: 12 }}>
+              <div className="row-between">
+                <h3>
+                  真实文件批量试算结果：{fileResult.file}（共 {fileResult.rows} 笔流水 · {fileResult.feature_count} 个特征）
+                </h3>
+                <button className="link-btn" onClick={() => setFileResult(null)}>收起</button>
+              </div>
+              <div className="scroll" style={{ maxHeight: 340 }}>
+                <table className="grid compact">
+                  <thead>
+                    <tr>
+                      <th>特征编码</th>
+                      <th>名称</th>
+                      <th>计算值</th>
+                      <th>单位</th>
+                      <th>说明 / 不可算原因</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fileResult.features.map((f) => (
+                      <tr key={f.code}>
+                        <td><code>{f.code}</code></td>
+                        <td>{f.name}</td>
+                        <td><b>{f.value === null ? '不可算' : String(f.value)}</b></td>
+                        <td className="muted small">{f.unit || '—'}</td>
+                        <td className="muted small">{f.reason || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
         </section>
       </div>
     </div>

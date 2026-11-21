@@ -98,15 +98,22 @@ function safeJson(text: string): unknown {
   }
 }
 
-/** 唯一二进制下载出口：复用鉴权头与 401/错误码处理，避免各页面重复手写 fetch。 */
-export async function requestBlob(path: string, timeoutMs = 120000): Promise<Blob> {
+/** 唯一二进制下载出口：复用鉴权头与 401/错误码处理，并支持导出 POST 与文件名解析。 */
+export async function requestBlobWithMeta(
+  path: string,
+  opts: { method?: 'GET' | 'POST'; timeoutMs?: number } = {},
+): Promise<{ blob: Blob; filename: string | null }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 120000);
   const token = getToken();
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = 'Bearer ' + token;
   try {
-    const response = await fetch(BASE + path, { headers, signal: controller.signal });
+    const response = await fetch(BASE + path, {
+      method: opts.method ?? 'GET',
+      headers,
+      signal: controller.signal,
+    });
     if (response.status === 401) {
       clearSession();
       throw new ApiError('E_AUTH', '登录已过期', { httpStatus: 401 });
@@ -114,8 +121,16 @@ export async function requestBlob(path: string, timeoutMs = 120000): Promise<Blo
     if (!response.ok) {
       throw new ApiError('E_UNKNOWN', '请求失败（' + response.status + '）', { httpStatus: response.status });
     }
-    return await response.blob();
+    const cd = response.headers.get('Content-Disposition') || '';
+    const m = /filename\*?=(?:UTF-8'')?"?([^";\n]+)"?/i.exec(cd);
+    const filename = m ? decodeURIComponent(m[1].trim()) : null;
+    return { blob: await response.blob(), filename };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function requestBlob(path: string, timeoutMs = 120000): Promise<Blob> {
+  const { blob } = await requestBlobWithMeta(path, { timeoutMs });
+  return blob;
 }

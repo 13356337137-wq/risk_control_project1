@@ -5,10 +5,11 @@ from datetime import datetime
 import html as _html
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import AuditLog, MetricValue, Report, Task, Txn, User
+from db.models import ApprovalRecord, AuditLog, MetricValue, Report, Task, Txn, User
 from db.session import get_session
 from helpers.security import current_user, require_banker
 
@@ -45,7 +46,97 @@ def get_report(task_id: int, db: Session = Depends(get_session), user: User = De
     payload = dict(rep.payload or {})
     payload["verification"] = rep.verification or {"status": "pending"}
     payload["in_trash"] = task.deleted_at is not None
+    approvals = db.execute(
+        select(ApprovalRecord)
+        .where(ApprovalRecord.task_id == task_id)
+        .order_by(ApprovalRecord.id.desc())
+    ).scalars().all()
+    payload["approvals"] = [
+        {
+            "id": a.id,
+            "report_id": a.report_id,
+            "report_version": a.report_version,
+            "decision": a.decision,
+            "comment": a.comment,
+            "actor_name": a.actor_name or "银行审批员",
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in approvals
+    ]
     return payload
+
+
+class ApprovalIn(BaseModel):
+    decision: str = Field(pattern="^(approve|reject|supplement|hold)$")
+    comment: str = Field(min_length=1, max_length=1000)
+
+
+@router.get("/reports/{task_id}/approvals", dependencies=[Depends(require_banker)])
+def list_approvals(task_id: int, db: Session = Depends(get_session), user: User = Depends(current_user)):
+    _check_task(db, task_id, user, allow_trashed_for_banker=True)
+    rows = db.execute(
+        select(ApprovalRecord)
+        .where(ApprovalRecord.task_id == task_id)
+        .order_by(ApprovalRecord.id.desc())
+    ).scalars().all()
+    return {
+        "items": [
+            {
+                "id": a.id,
+                "report_id": a.report_id,
+                "report_version": a.report_version,
+                "decision": a.decision,
+                "comment": a.comment,
+                "actor_name": a.actor_name or "银行审批员",
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in rows
+        ]
+    }
+
+
+@router.post("/reports/{task_id}/approvals", dependencies=[Depends(require_banker)])
+def create_approval(
+    task_id: int,
+    payload: ApprovalIn,
+    db: Session = Depends(get_session),
+    user: User = Depends(current_user),
+):
+    """审批留痕：记录与当前报告版本绑定的审批决定与意见。"""
+    task = _check_task(db, task_id, user, allow_trashed_for_banker=False)
+    rep = db.execute(
+        select(Report).where(Report.task_id == task_id).order_by(Report.version.desc())
+    ).scalars().first()
+    if rep is None:
+        raise HTTPException(404, detail={"code": "E_STATE", "message": "该任务尚未生成报告，无法录入审批意见"})
+    row = ApprovalRecord(
+        task_id=task.id,
+        report_id=rep.id,
+        report_version=rep.version,
+        decision=payload.decision,
+        comment=payload.comment.strip(),
+        actor_id=user.id,
+        actor_name=user.display_name or user.username,
+    )
+    db.add(row)
+    db.add(AuditLog(
+        actor_id=user.id,
+        action="approval_decision",
+        object_type="report",
+        object_id=rep.id,
+        detail=f"task={task.id}; v={rep.version}; decision={payload.decision}; {payload.comment.strip()[:120]}",
+    ))
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": row.id,
+        "report_id": row.report_id,
+        "report_version": row.report_version,
+        "decision": row.decision,
+        "comment": row.comment,
+        "actor_name": row.actor_name,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
 
 
 @router.post("/reports/{task_id}/export", dependencies=[Depends(require_banker)])

@@ -1,4 +1,4 @@
-import { request, requestBlob } from './client';
+import { request, requestBlob, requestBlobWithMeta } from './client';
 
 /** 银行侧接口直出对象（没有 {code,data} 信封），与借款侧不同——合并前端时这一点最容易踩。 */
 
@@ -30,9 +30,16 @@ export type TaskList = { items: TaskSummary[]; total: number; facets: Record<str
 export type TaskFilters = {
   q?: string;
   authenticity?: string;
+  source?: string;
   status?: string;
   bank?: string;
   risk?: string;
+  risk_code?: string;
+  parse?: string;
+  date_from?: string;
+  date_to?: string;
+  min_income?: string | number;
+  max_income?: string | number;
   trash?: boolean;
   limit?: number;
   offset?: number;
@@ -44,9 +51,16 @@ export function listTasks(filters: TaskFilters = {}): Promise<TaskList> {
   if (filters.offset) params.set('offset', String(filters.offset));
   if (filters.q) params.set('q', filters.q);
   if (filters.authenticity) params.set('authenticity', filters.authenticity);
+  if (filters.source) params.set('source', filters.source);
   if (filters.status) params.set('status', filters.status);
   if (filters.bank) params.set('bank', filters.bank);
   if (filters.risk) params.set('risk', filters.risk);
+  if (filters.risk_code) params.set('risk_code', filters.risk_code);
+  if (filters.parse) params.set('parse', filters.parse);
+  if (filters.date_from) params.set('date_from', filters.date_from);
+  if (filters.date_to) params.set('date_to', filters.date_to);
+  if (filters.min_income !== undefined && filters.min_income !== '') params.set('min_income', String(filters.min_income));
+  if (filters.max_income !== undefined && filters.max_income !== '') params.set('max_income', String(filters.max_income));
   if (filters.trash) params.set('trash', '1');
   return request<TaskList>('/tasks?' + params.toString());
 }
@@ -94,8 +108,59 @@ export function purgeTasks(taskIds: number[]): Promise<{ purged: number; ids: nu
   return request('/tasks/purge', { body: { task_ids: taskIds, confirm: true } });
 }
 
+export function getTaskExportWithMeta(taskId: number, format: 'json' | 'csv'): Promise<{ blob: Blob; filename: string | null }> {
+  return requestBlobWithMeta(format === 'json' ? `/tasks/${taskId}/export.json` : `/tasks/${taskId}/transactions.csv`);
+}
+
 export function getTaskExportBlob(taskId: number, format: 'json' | 'csv'): Promise<Blob> {
   return requestBlob(format === 'json' ? `/tasks/${taskId}/export.json` : `/tasks/${taskId}/transactions.csv`);
+}
+
+export function exportPrintableReport(taskId: number): Promise<{ blob: Blob; filename: string | null }> {
+  return requestBlobWithMeta(`/reports/${taskId}/export`, { method: 'POST' });
+}
+
+export type ApprovalRecordItem = {
+  id: number;
+  report_id: number | null;
+  report_version: number;
+  decision: 'approve' | 'reject' | 'supplement' | 'hold';
+  comment: string;
+  actor_name: string;
+  created_at: string | null;
+};
+
+export type TaskBankDetail = {
+  id: number;
+  biz_no: string;
+  status: string;
+  carrier: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  failure_code?: string | null;
+  consent_version?: string | null;
+  consent_at?: string | null;
+  created_at?: string | null;
+  check_result?: {
+    preread?: Record<string, unknown>;
+    header_meta?: Record<string, unknown>;
+    matched_template?: { id?: number; bank_code?: string; version?: number; by?: string; score?: number } | null;
+    template_match?: { template_id?: number | null; by?: string | null; score?: number | null; reason?: string | null };
+    template_mismatch?: { reasons?: string[] } | null;
+    whitelist?: { reason?: string; at?: string } | null;
+    [key: string]: unknown;
+  } | null;
+};
+
+export function getBankTask(taskId: number): Promise<TaskBankDetail> {
+  return request<TaskBankDetail>('/tasks/' + taskId);
+}
+
+export function createApproval(
+  taskId: number,
+  payload: { decision: 'approve' | 'reject' | 'supplement' | 'hold'; comment: string },
+): Promise<ApprovalRecordItem> {
+  return request<ApprovalRecordItem>(`/reports/${taskId}/approvals`, { body: payload });
 }
 
 export type ReportPayload = {
@@ -133,7 +198,7 @@ export type ReportPayload = {
   };
   metric_set_version?: number;
   threshold_version?: number;
-  conclusions?: { code: string; message: string; level: string }[];
+  conclusions?: { code: string; message: string; level: string; threshold?: string | number | null; value?: string | number | null }[];
   scores_detail?: unknown;
   evidence?: {
     rule_code?: string;
@@ -146,6 +211,8 @@ export type ReportPayload = {
   self_check?: Record<string, unknown> | null;
   verification?: unknown;
   custom_field_stats?: unknown;
+  header_meta?: Record<string, unknown>;
+  approvals?: ApprovalRecordItem[];
   version?: number;
 };
 
@@ -215,11 +282,12 @@ export type AuditRow = {
   created_at: string | null;
 };
 
-export function listAudit(params: { limit?: number; offset?: number } = {}): Promise<{ items: AuditRow[]; total: number }> {
+export function listAudit(params: { page?: number; size?: number; action?: string } = {}): Promise<{ items: AuditRow[]; total: number; page?: number; size?: number }> {
   const query = new URLSearchParams();
-  query.set('limit', String(params.limit ?? 50));
-  if (params.offset) query.set('offset', String(params.offset));
-  return request<{ items: AuditRow[]; total: number }>('/audit?' + query.toString());
+  query.set('page', String(params.page ?? 1));
+  query.set('size', String(params.size ?? 20));
+  if (params.action) query.set('action', params.action);
+  return request('/audit?' + query.toString());
 }
 
 export type MetricDef = {
@@ -339,7 +407,12 @@ export type TemplatePreview = {
     account_name?: string | null;
     bank_branch?: string | null;
     account_type?: string | null;
+    currency?: string | null;
+    period_start?: string | null;
+    period_end?: string | null;
+    [key: string]: string | null | undefined;
   };
+  extra_meta?: Record<string, string>;
   required_fields: string[];
   missing_columns: string[];
   empty_columns: string[];
@@ -447,6 +520,8 @@ export type TemplateAnalyzeResult = {
   bank_name: string | null;
   page_count: number;
   page_size: { w: number; h: number };
+  ocr_used?: boolean;
+  engine?: string;
   header_found: boolean;
   short_results: ShortFieldMatch[];
   header_results: HeaderFieldMatch[];
@@ -464,7 +539,8 @@ export type TemplateAnalyzeResult = {
 };
 
 export function analyzeTemplateFields(payload: {
-  file: File;
+  file: Blob;
+  fileName?: string;
   shortFields: ShortFieldSpec[];
   headerFields: HeaderFieldSpec[];
   bankCode?: string;
@@ -473,7 +549,8 @@ export function analyzeTemplateFields(payload: {
   publish?: boolean;
 }): Promise<TemplateAnalyzeResult> {
   const form = new FormData();
-  form.append('file', payload.file, payload.file.name || 'sample.pdf');
+  const fname = payload.fileName || (payload.file instanceof File ? payload.file.name : 'sample.pdf');
+  form.append('file', payload.file, fname);
   form.append('short_fields', JSON.stringify(payload.shortFields));
   form.append('header_fields', JSON.stringify(payload.headerFields));
   if (payload.bankCode?.trim()) form.append('bank_code', payload.bankCode.trim().toUpperCase());
@@ -483,8 +560,13 @@ export function analyzeTemplateFields(payload: {
   return request<TemplateAnalyzeResult>('/templates/analyze-fields', { form, timeoutMs: 180000 });
 }
 
-export function loadBuiltinTemplates(publish = false): Promise<{ loaded: { id: number; bank_code: string; version: number; status: string }[]; skipped: string[] }> {
-  return request(`/templates/load-builtin?publish=${publish ? 'true' : 'false'}`, { method: 'POST' });
+export function loadBuiltinTemplates(
+  publish = false,
+  force = false,
+): Promise<{ loaded: { id: number; bank_code: string; version: number; status: string }[]; skipped: string[] }> {
+  return request(`/templates/load-builtin?publish=${publish ? 'true' : 'false'}&force=${force ? 'true' : 'false'}`, {
+    method: 'POST',
+  });
 }
 
 export function previewTemplate(id: number, file: Blob, password?: string): Promise<TemplatePreview> {
@@ -599,13 +681,27 @@ export function resetThresholds(): Promise<{ saved_version: number; values: Reco
   return request('/thresholds/reset', { method: 'POST' });
 }
 
+export type MetricAtom = {
+  key: string;
+  kind: string;
+  label: string;
+  detail: string;
+  params?: Record<string, unknown>[];
+};
+
+export function getMetricAtoms(): Promise<{ items: MetricAtom[] }> {
+  return request<{ items: MetricAtom[] }>('/custom-metrics/atoms');
+}
+
 export type CustomMetricItem = {
   id: number;
   code: string;
   name: string;
   unit?: string;
   formula?: string;
-  group?: string;
+  group_name?: string;
+  inputs?: string;
+  note?: string;
   steps?: unknown[];
 };
 
@@ -614,7 +710,14 @@ export function listCustomMetrics(): Promise<{ items: CustomMetricItem[] }> {
 }
 
 export function createCustomMetric(body: {
-  code: string; name: string; unit?: string; formula?: string; group?: string;
+  code: string;
+  name: string;
+  unit?: string;
+  formula?: string;
+  group_name?: string;
+  inputs?: string;
+  note?: string;
+  steps?: { atom: string; args?: Record<string, unknown> }[];
 }): Promise<CustomMetricItem> {
   return request('/custom-metrics', { method: 'POST', body });
 }

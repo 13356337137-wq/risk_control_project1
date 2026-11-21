@@ -38,6 +38,7 @@ class FeatureDef:
     expr: str | None = None
     version: str = "1.0"
     description: str = ""
+    category: str = "基础统计"
 
     def __post_init__(self) -> None:
         if not self.code or not self.name:
@@ -60,6 +61,7 @@ class FeatureDef:
             "body": self.steps if self.steps else self.expr,
             "version": self.version,
             "description": self.description,
+            "category": self.category,
         }
 
 
@@ -206,7 +208,69 @@ BUILTIN_FEATURES: tuple[FeatureDef, ...] = (
                description="以本帧最大交易日为锚点回溯 90 天的出账合计。"),
     FeatureDef(code="f_out_pct_change_max", name="单笔最大跳变", unit="比例",
                expr="max(pct_change(amount))",
+               category="鲁棒与异常",
                description="相邻两笔金额变化率的最大值，用来发现单笔跳变。"),
+    # ---- 新增信贷风控衍生特征（Lab 演示与复用） ----
+    FeatureDef(code="f_robust_outlier_count", name="鲁棒异常大额出账笔数", unit="笔",
+               expr="count(where=(direction=='out') and (robust_zscore() > 3.5))",
+               category="鲁棒与异常",
+               description="基于中位数与 MAD 稳健 Z 分数识别长尾异常出账笔数，比标准差更抗极端偏态。"),
+    FeatureDef(code="f_amount_iqr_ratio", name="金额四分位离散比", unit="比例",
+               expr="iqr() / median(amount)",
+               category="鲁棒与异常",
+               description="金额四分位距与中位数之比，用于刻画常规流水波动幅度的稳健程度。"),
+    FeatureDef(code="f_weekend_out_share", name="周末出账金额占比", unit="比例",
+               expr=f"sum(amount, where=({OUT}) and dow>=5) / sum(amount, where={OUT})",
+               category="时间行为",
+               description="周六、周日出账金额占总出账额的比例，辅助识别非工作日消费与夜间高频。"),
+    FeatureDef(code="f_night_large_out_count", name="夜间高分位大额出账笔数", unit="笔",
+               expr=f"count(where=({OUT}) and in_hours('22:00','05:59') and (pct_rank() >= 0.9))",
+               category="时间行为",
+               description="同时满足夜间时段（22:00-05:59）与全账期金额前 10% 分位的交叉高危出账笔数。"),
+    FeatureDef(code="f_salary_in_share", name="工资入账占比", unit="比例",
+               expr=f"sum(amount, where=({IN_}) and in_lexicon(name='salary')) / sum(amount, where={IN_})",
+               category="收入与偿债",
+               description="摘要命中工资薪酬词库的入账金额占总入账比例，评估稳定代发薪资成色。"),
+    FeatureDef(code="f_online_loan_out_share", name="网贷小贷出账占比", unit="比例",
+               expr=f"sum(amount, where=({OUT}) and in_lexicon(name='online_loan')) / sum(amount, where={OUT})",
+               category="收入与偿债",
+               description="摘要或附言命中网贷/消金平台词库的出账金额占总出账比例，揭示隐性共债压力。"),
+    FeatureDef(code="f_debt_service_ratio", name="广义偿债支出收入比", unit="比例",
+               expr=f"sum(amount, where=({OUT}) and (in_lexicon(name='loan_repayment') or in_lexicon(name='credit_card'))) / sum(amount, where={IN_})",
+               category="收入与偿债",
+               description="贷款还款与信用卡还款合计支出占当期总入账比，用于横向对照核心 DTI 指标。"),
+    FeatureDef(code="f_third_party_flow_share", name="三方支付流转占比", unit="比例",
+               expr="sum(amount, where=in_lexicon(name='third_party')) / sum(amount)",
+               category="收入与偿债",
+               description="经由微信、支付宝等第三方支付渠道收付的金额占全部流水总额的比例。"),
+    FeatureDef(code="f_high_risk_hits", name="涉赌与虚拟币高危命中笔数", unit="笔",
+               expr="count(where=in_lexicon(name='gambling') or in_lexicon(name='crypto'))",
+               category="黑灰高危行为",
+               description="全文摘要命中博彩或虚拟货币词库的黑灰行为硬触发笔数。"),
+    FeatureDef(code="f_cash_out_share", name="现金支取占比", unit="比例",
+               expr=f"sum(amount, where=({OUT}) and in_lexicon(name='cash')) / sum(amount, where={OUT})",
+               category="黑灰高危行为",
+               description="ATM/柜面取现等脱离可追踪清算链路的出账金额占总出账额比例。"),
+    FeatureDef(code="f_counterparty_hhi", name="对手方金额赫芬达尔指数", unit="指数",
+               expr="share_square_sum()",
+               category="集中度与稳定性",
+               description="按交易对手方金额占比平方求和（HHI），越接近 1 表示资金往来越集中于单一对手。"),
+    FeatureDef(code="f_top3_counterparty_share", name="前三大对手方金额占比", unit="比例",
+               expr="top_share(k=3)",
+               category="集中度与稳定性",
+               description="前 3 大交易对手方金额占总流水的比重，用于识别空壳走账或单一资金池。"),
+    FeatureDef(code="f_overdraft_days", name="日终余额透支天数", unit="天",
+               expr="overdraft_days()",
+               category="集中度与稳定性",
+               description="统计期间内日终余额小于 0 的天数，反映短期流动性失血风险。"),
+    FeatureDef(code="f_month_end_balance_slope", name="月末余额走势斜率", unit="元/月",
+               expr="slope(month_end_balances())",
+               category="集中度与稳定性",
+               description="对各自然月末余额做最小二乘线性回归的斜率，正值为蓄水累积、负值为持续消耗。"),
+    FeatureDef(code="f_recent30_flow_ratio", name="近30天资金活跃集中度", unit="比例",
+               expr="sum(within_days(days=30), signed=false) / sum(signed=false)",
+               category="时间行为",
+               description="最近 30 天内流水发生额占全账期总发生额比例，识别突击刷流水或近期异常放量。"),
 )
 
 

@@ -151,6 +151,7 @@ export default function UploadPage() {
       period_start: monthStart(start),
       period_end: monthEnd(end),
       bank_code: bankCode || undefined,
+      consent_version: 'PIPL-v2026.1',
     };
 
     try {
@@ -259,6 +260,39 @@ export default function UploadPage() {
                   <span>{file.name}</span>
                   <span className="muted small">{formatSize(file.size)}</span>
                   <button
+                    type="button"
+                    className="link-btn"
+                    disabled={index === 0}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setFiles((prev) => {
+                        if (index <= 0) return prev;
+                        const next = [...prev];
+                        [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                        return next;
+                      });
+                    }}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="link-btn"
+                    disabled={index === files.length - 1}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setFiles((prev) => {
+                        if (index >= prev.length - 1) return prev;
+                        const next = [...prev];
+                        [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                        return next;
+                      });
+                    }}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
                     className="link-btn"
                     onClick={(event) => {
                       event.stopPropagation();

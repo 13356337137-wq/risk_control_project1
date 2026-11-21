@@ -69,7 +69,11 @@ export default function DashboardPage() {
           <tbody>
             {data.verdicts.map((item) => (
               <tr key={item.verdict}>
-                <td style={{ width: 160 }}>{item.verdict}</td>
+                <td style={{ width: 160 }}>
+                  <Link className="link-btn" to={'/bank/tasks?q=' + encodeURIComponent(item.verdict)}>
+                    {item.verdict}
+                  </Link>
+                </td>
                 <td>
                   <span className="bar-inline">
                     <Bar value={item.count} max={maxVerdict} tone={item.verdict === '未发现异常' || item.verdict.includes('通过') ? 'brand' : item.verdict.includes('不一致') || item.verdict.includes('可疑') || item.verdict.includes('不通过') ? 'bad' : 'muted'} />
@@ -109,7 +113,11 @@ export default function DashboardPage() {
           <tbody>
             {data.banks.map((item) => (
               <tr key={item.bank_code}>
-                <td>{item.bank_code}</td>
+                <td>
+                  <Link className="link-btn" to={'/bank/tasks?bank=' + encodeURIComponent(item.bank_code)}>
+                    {item.bank_code}
+                  </Link>
+                </td>
                 <td>{item.tasks}</td>
                 <td className="small muted">{item.txn}</td>
               </tr>
@@ -127,14 +135,24 @@ export default function DashboardPage() {
             <tbody>
               {data.threshold_hits.map((item) => (
                 <tr key={item.code}>
-                  <td>{item.code}</td>
+                  <td>
+                    <Link className="link-btn" to={'/bank/tasks?risk_code=' + encodeURIComponent(item.code)}>
+                      {item.code} {item.name ? `· ${item.name}` : ''}
+                    </Link>
+                  </td>
                   <td>
                     <span className="bar-inline">
                       <Bar value={item.count} max={maxHit} tone="warn" />
                       <span>{item.count}</span>
                     </span>
                   </td>
-                  <td className="small muted">{item.threshold_key ?? '—'}</td>
+                  <td className="small muted">
+                    {item.threshold_key ? (
+                      <Link className="link-btn" to={`/bank/thresholds#def-${item.threshold_key}`}>
+                        {item.threshold_key}
+                      </Link>
+                    ) : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>

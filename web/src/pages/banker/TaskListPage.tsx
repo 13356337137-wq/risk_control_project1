@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   listTasks,
   purgeTasks,
@@ -39,14 +39,22 @@ function Badge({ text, tone }: { text: string; tone: string }) {
 
 export default function TaskListPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const isAdmin = Boolean(getUser()?.is_admin);
 
   const [data, setData] = useState<TaskList | null>(null);
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('');
-  const [authenticity, setAuthenticity] = useState('');
-  const [bank, setBank] = useState('');
-  const [risk, setRisk] = useState('');
+  const [query, setQuery] = useState(() => searchParams.get('q') || '');
+  const [status, setStatus] = useState(() => searchParams.get('status') || '');
+  const [authenticity, setAuthenticity] = useState(() => searchParams.get('authenticity') || '');
+  const [source, setSource] = useState(() => searchParams.get('source') || '');
+  const [bank, setBank] = useState(() => searchParams.get('bank') || '');
+  const [risk, setRisk] = useState(() => searchParams.get('risk') || '');
+  const [riskCode, setRiskCode] = useState(() => searchParams.get('risk_code') || '');
+  const [parseLevel, setParseLevel] = useState(() => searchParams.get('parse') || '');
+  const [dateFrom, setDateFrom] = useState(() => searchParams.get('date_from') || '');
+  const [dateTo, setDateTo] = useState(() => searchParams.get('date_to') || '');
+  const [minIncome, setMinIncome] = useState(() => searchParams.get('min_income') || '');
+  const [maxIncome, setMaxIncome] = useState(() => searchParams.get('max_income') || '');
   const [trash, setTrash] = useState(false);
 
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -65,8 +73,15 @@ export default function TaskListPage() {
         q: query || undefined,
         status: status || undefined,
         authenticity: authenticity || undefined,
+        source: source || undefined,
         bank: bank || undefined,
         risk: risk || undefined,
+        risk_code: riskCode || undefined,
+        parse: parseLevel || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        min_income: minIncome || undefined,
+        max_income: maxIncome || undefined,
         trash,
         limit: PAGE,
         offset,
@@ -80,7 +95,7 @@ export default function TaskListPage() {
           if (!silent) setLoading(false);
         });
     },
-    [query, status, authenticity, bank, risk, trash, offset],
+    [query, status, authenticity, source, bank, risk, riskCode, parseLevel, dateFrom, dateTo, minIncome, maxIncome, trash, offset],
   );
 
   useEffect(() => {
@@ -253,6 +268,48 @@ export default function TaskListPage() {
               <option key={key} value={key}>{key}（{count}）</option>
             ))}
           </select>
+          <details style={{ display: 'inline-block' }}>
+            <summary className="link-btn" style={{ padding: '4px 8px' }}>高级筛选（日期/收入/解析/来源）</summary>
+            <div className="filters" style={{ marginTop: 8, padding: '8px 10px', background: '#f8fafc', borderRadius: 6 }}>
+              <select aria-label="来源筛选" value={source} onChange={(e) => { setSource(e.target.value); setOffset(0); }}>
+                <option value="">全部来源</option>
+                <option value="clean">可信电子版</option>
+                <option value="warn">存疑/影像</option>
+              </select>
+              <select aria-label="解析质量" value={parseLevel} onChange={(e) => { setParseLevel(e.target.value); setOffset(0); }}>
+                <option value="">全部解析质量</option>
+                <option value="ok">解析完整</option>
+                <option value="warn">部分受限</option>
+                <option value="fail">解析失败</option>
+              </select>
+              <input placeholder="风险规则码（如 R1）" value={riskCode} onChange={(e) => { setRiskCode(e.target.value); setOffset(0); }} style={{ width: 120 }} />
+              <input type="date" aria-label="提交起日" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setOffset(0); }} />
+              <input type="date" aria-label="提交止日" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setOffset(0); }} />
+              <input type="number" placeholder="最低月均收入" value={minIncome} onChange={(e) => { setMinIncome(e.target.value); setOffset(0); }} style={{ width: 110 }} />
+              <input type="number" placeholder="最高月均收入" value={maxIncome} onChange={(e) => { setMaxIncome(e.target.value); setOffset(0); }} style={{ width: 110 }} />
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => {
+                  setQuery('');
+                  setStatus('');
+                  setAuthenticity('');
+                  setSource('');
+                  setBank('');
+                  setRisk('');
+                  setRiskCode('');
+                  setParseLevel('');
+                  setDateFrom('');
+                  setDateTo('');
+                  setMinIncome('');
+                  setMaxIncome('');
+                  setOffset(0);
+                }}
+              >
+                重置全部
+              </button>
+            </div>
+          </details>
         </div>
 
         {isAdmin && selectedIds.length > 0 && (
@@ -309,9 +366,10 @@ export default function TaskListPage() {
               )}
               <th>业务号 / 银行</th>
               <th>真实性</th>
-              <th>解析</th>
+              <th>解析与受限</th>
               <th>风险线索</th>
-              <th>月均收入</th>
+              <th>期间 / 月均收入 / DTI</th>
+              <th>材料</th>
               <th>账期</th>
               <th>操作</th>
             </tr>
@@ -353,13 +411,18 @@ export default function TaskListPage() {
                     <div>{task.parse?.label}</div>
                     <div className="muted small">
                       {task.parse?.txn_count ?? 0} 笔 · 指标 {task.parse?.metrics_valued ?? 0}/{task.parse?.metrics_total ?? 40}
+                      {task.limitations ? ` · 受限 ${task.limitations}` : ''}
                     </div>
                   </td>
                   <td>
                     <div>{task.risk?.label}</div>
-                    <div className="muted small">{task.risk?.count ?? 0} 条</div>
+                    <div className="muted small">{task.risk?.count ?? 0} 条 · {task.source?.label || '—'}</div>
                   </td>
-                  <td className="mono">{task.monthly_income ?? '—'}</td>
+                  <td className="mono small">
+                    <div>{task.monthly_income ?? '—'}/月</div>
+                    <div className="muted">总额 {task.income ?? '—'} · DTI {task.dti ?? '—'}</div>
+                  </td>
+                  <td className="small muted">{task.materials ?? 1} 份</td>
                   <td className="small">
                     {task.period_start ?? '—'} ~ {task.period_end ?? '—'}
                   </td>

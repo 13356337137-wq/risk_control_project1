@@ -98,7 +98,6 @@ export default function EntitiesPage() {
   const [methods, setMethods] = useState<MergeMethodInfo[]>([]);
   const [selectedSubject, setSelectedSubject] = useState('');
   const [selectedMethod, setSelectedMethod] = useState('union_dedup');
-  const [overlapMode, setOverlapMode] = useState('max');
   const [mergeResult, setMergeResult] = useState<MergeResult | null>(null);
   const [customTaskIds, setCustomTaskIds] = useState('');
   const [conflictChoice, setConflictChoice] = useState<Record<string, { subject: string; note: string }>>({});
@@ -135,7 +134,7 @@ export default function EntitiesPage() {
     setBusy(true);
     setError('');
     try {
-      const res = await getEntitiesMerge(sub, selectedMethod, overlapMode);
+      const res = await getEntitiesMerge(sub, selectedMethod);
       setMergeResult(normalizeMergeResult(res, selectedMethod, sub));
     } catch (err) {
       setError(getErrorMessage(err, 'banker'));
@@ -245,11 +244,6 @@ export default function EntitiesPage() {
                 </option>
               ))}
             </select>
-            <select value={overlapMode} onChange={(e) => setOverlapMode(e.target.value)} aria-label="重叠处理">
-              <option value="max">重叠月取大</option>
-              <option value="avg">重叠月取均</option>
-              <option value="sum">重叠月相加</option>
-            </select>
             <Button size="sm" disabled={busy || !selectedSubject} onClick={() => void runSubjectMerge()}>
               {busy ? '计算中…' : '按主体合并'}
             </Button>
@@ -305,6 +299,36 @@ export default function EntitiesPage() {
                   ))}
                 </tbody>
               </table>
+            ) : null}
+            {mergeResult.accounts?.length ? (
+              <div style={{ marginTop: 10 }}>
+                <span className="small muted">纳入合并的账户明细（{mergeResult.accounts.length} 个）：</span>
+                <table className="grid compact" style={{ marginTop: 4 }}>
+                  <thead><tr><th>任务</th><th>银行 / 账号</th><th>月数</th><th>笔数</th><th>期末余额</th><th>结论</th></tr></thead>
+                  <tbody>
+                    {mergeResult.accounts.map((acc) => (
+                      <tr key={acc.task_id}>
+                        <td className="mono small">#{acc.task_id}</td>
+                        <td>{acc.bank_name || '—'} · <span className="mono small">{acc.account_masked || '—'}</span></td>
+                        <td>{acc.months ?? '—'}</td>
+                        <td>{acc.txn_count ?? '—'}</td>
+                        <td className="mono small">{acc.balance_end ?? '—'}</td>
+                        <td className="small muted">{acc.verdict || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            {mergeResult.unsupported?.length ? (
+              <div style={{ marginTop: 10 }}>
+                <span className="small muted">本口径下不适用/未计算指标：</span>
+                <ul className="plain small muted">
+                  {mergeResult.unsupported.map((u) => (
+                    <li key={u.code}>{u.code} {u.name}：{u.reason}</li>
+                  ))}
+                </ul>
+              </div>
             ) : null}
           </div>
         )}

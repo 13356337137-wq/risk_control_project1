@@ -105,6 +105,12 @@ def ensure_columns() -> list[str]:
             conn.execute(text("ALTER TABLE task ADD COLUMN user_id INT NULL"))
             conn.execute(text("CREATE INDEX ix_task_user_id ON task (user_id)"))
             done.append("task.user_id")
+        if "consent_version" not in columns:
+            conn.execute(text("ALTER TABLE task ADD COLUMN consent_version VARCHAR(32) NULL"))
+            done.append("task.consent_version")
+        if "consent_at" not in columns:
+            conn.execute(text("ALTER TABLE task ADD COLUMN consent_at DATETIME NULL"))
+            done.append("task.consent_at")
     try:
         ucols = {c["name"] for c in insp.get_columns("app_user")}
     except Exception:  # noqa: BLE001

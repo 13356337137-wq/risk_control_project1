@@ -1,3 +1,8 @@
+import type {
+  HeaderFieldSpec,
+  ShortFieldSpec,
+  TemplateAnalyzeResult,
+} from '../../api/banker';
 import type { InspectBand, InspectCell, InspectPage, InspectSingle } from '../../api/lab';
 import { COLUMN_LABELS, labelOf } from '../../lib/columns';
 
@@ -18,6 +23,7 @@ export type ColumnBox = {
   id: string;
   regionId: string;
   field: string;
+  fields?: string[];
   label?: string;
   headerText?: string;
   x: number; // normalized [0, 1]
@@ -41,7 +47,7 @@ export type SingleBox = {
   manual?: boolean;
 };
 
-export type CustomFieldOption = { key: string; label: string; hint?: string };
+export type CustomFieldOption = { key: string; label: string; kind?: 'header' | 'short'; hint?: string };
 
 export type AnnotateSnapshot = {
   regions: TableRegionBox[];
@@ -79,6 +85,22 @@ export const SINGLE_FIELD_OPTIONS: { key: string; label: string }[] = [
   { key: 'currency', label: '币种' },
 ];
 
+export const DEFAULT_SHORT_FIELDS: ShortFieldSpec[] = [
+  { field: 'account_no', label: '卡号/账号', keywords: '卡号,账号,银行卡号,客户账号,账户' },
+  { field: 'account_name', label: '户名', keywords: '户名,姓名,账户名,客户姓名,持卡人' },
+  { field: 'period', label: '起止日期', keywords: '起止日期,查询日期,交易区间,交易时段,明细周期' },
+  { field: 'bank_branch', label: '开户行', keywords: '开户行,开户网点,开户机构,网点' },
+  { field: 'currency', label: '币种', keywords: '币种,货币,钞汇' },
+];
+
+export const DEFAULT_HEADER_FIELDS: HeaderFieldSpec[] = [
+  { field: 'txn_date', label: '交易日期', keywords: '交易日期,记账日期,交易时间,日期' },
+  { field: 'summary', label: '摘要', keywords: '摘要,交易摘要,附言,用途,交易类型' },
+  { field: 'amount', label: '交易金额', keywords: '交易金额,发生额,记账金额,金额,收入/支出' },
+  { field: 'balance', label: '账户余额', keywords: '账户余额,余额,联机余额,当前余额' },
+  { field: 'counterparty_name', label: '对方户名', keywords: '对方户名,对方账号与户名,对方姓名,对手信息,交易对手' },
+];
+
 export const DEFAULT_REQUIRED_FIELDS = ['txn_date', 'amount', 'balance'];
 
 export function bankLabel(code: string): string {
@@ -93,13 +115,21 @@ export function uid(prefix: string): string {
 export function fieldLabel(key: string, customFields: CustomFieldOption[]): string {
   const custom = customFields.find((f) => f.key === key);
   if (custom) return custom.label;
+  const single = SINGLE_FIELD_OPTIONS.find((s) => s.key === key);
+  if (single) return single.label;
   return labelOf(key);
 }
 
 export function allFieldOptions(customFields: CustomFieldOption[]): CustomFieldOption[] {
   const existingKeys = new Set(COLUMN_LABELS.map((c) => c.key));
-  const extra = customFields.filter((c) => !existingKeys.has(c.key));
+  const extra = customFields.filter((c) => c.kind !== 'short' && !existingKeys.has(c.key));
   return [...COLUMN_LABELS, ...extra];
+}
+
+export function allSingleFieldOptions(customFields: CustomFieldOption[]): CustomFieldOption[] {
+  const existingKeys = new Set(SINGLE_FIELD_OPTIONS.map((s) => s.key));
+  const extra = customFields.filter((c) => c.kind === 'short' && !existingKeys.has(c.key));
+  return [...SINGLE_FIELD_OPTIONS, ...extra];
 }
 
 function clamp01(val: number): number {
@@ -230,7 +260,7 @@ export function fromSavedLayout(layoutRaw: unknown): {
       slot?: PageSlot;
       area?: NormalizedArea;
       headerY?: number;
-      columns?: { field?: string; fields?: string[]; label?: string; x: number; w: number }[];
+      columns?: { field?: string; fields?: string[]; label?: string; header_text?: string; x: number; w: number }[];
     }[];
     meta_boxes?: { field: string; label?: string; value?: string; page?: number; x: number; y: number; w: number; h: number }[];
     custom_fields?: CustomFieldOption[];
@@ -253,12 +283,15 @@ export function fromSavedLayout(layoutRaw: unknown): {
       headerY: clamp01(Number(t.headerY ?? area.y ?? 0.16)),
     });
     for (const c of t.columns || []) {
-      const fkey = c.field || c.fields?.[0] || 'summary';
+      const fList = (c.fields && c.fields.length ? c.fields : c.field ? [c.field] : ['summary']).filter(Boolean);
+      const fkey = fList[0] || 'summary';
       columns.push({
         id: uid('col'),
         regionId: rid,
         field: fkey,
+        fields: fList,
         label: c.label,
+        headerText: c.header_text || c.label,
         x: clamp01(Number(c.x ?? 0)),
         w: Math.max(0.012, Math.min(1, Number(c.w ?? 0.08))),
         source: 'saved',
@@ -269,8 +302,11 @@ export function fromSavedLayout(layoutRaw: unknown): {
   }
   const singles: SingleBox[] = (lay.meta_boxes || []).map((m) => ({
     id: uid('meta'),
-    field: m.field,
-    label: m.label || SINGLE_FIELD_OPTIONS.find((s) => s.key === m.field)?.label || m.field,
+    field: m.field === 'branch' ? 'bank_branch' : m.field,
+    label:
+      m.label ||
+      SINGLE_FIELD_OPTIONS.find((s) => s.key === (m.field === 'branch' ? 'bank_branch' : m.field))?.label ||
+      m.field,
     value: m.value || '',
     page: Number(m.page ?? 0),
     x: clamp01(Number(m.x ?? 0)),
@@ -280,6 +316,46 @@ export function fromSavedLayout(layoutRaw: unknown): {
     manual: true,
   }));
   return { regions, columns, singles, customFields: lay.custom_fields || [] };
+}
+
+export function buildBoxesFromAnalyzeResult(
+  result: TemplateAnalyzeResult,
+  shortSpecs: ShortFieldSpec[] = [],
+  headerSpecs: HeaderFieldSpec[] = [],
+) {
+  const loaded = fromSavedLayout(result.layout);
+  const custom = [...loaded.customFields];
+  const stdHeader = new Set(COLUMN_LABELS.map((x) => x.key));
+  const stdSingle = new Set(SINGLE_FIELD_OPTIONS.map((x) => x.key));
+  for (const h of headerSpecs) {
+    if (h.field.trim() && !stdHeader.has(h.field) && !custom.some((c) => c.key === h.field)) {
+      custom.push({ key: h.field.trim(), label: h.label.trim() || h.field.trim(), kind: 'header' });
+    }
+  }
+  for (const s of shortSpecs) {
+    if (s.field.trim() && !stdSingle.has(s.field) && !custom.some((c) => c.key === s.field)) {
+      custom.push({ key: s.field.trim(), label: s.label.trim() || s.field.trim(), kind: 'short' });
+    }
+  }
+  // 将 analyzeResult 的样值带回列框 cells 便于侧栏预览
+  const colWithSamples = loaded.columns.map((c) => {
+    const matched = result.header_results.find((hr) => hr.field === c.field);
+    return matched
+      ? {
+          ...c,
+          confidence: matched.confidence ?? 0.9,
+          headerText: matched.header_text || c.headerText,
+          source: 'analyze',
+          cells: matched.sample_values.map((tx) => ({ text: tx, x0: 0, x1: 0, y0: 0, y1: 0 })),
+        }
+      : c;
+  });
+  return {
+    regions: loaded.regions,
+    columns: colWithSamples,
+    singles: loaded.singles,
+    customFields: custom,
+  };
 }
 
 export function buildTemplatePayload(
@@ -296,13 +372,18 @@ export function buildTemplatePayload(
       .filter((c) => c.regionId === reg.id && c.field)
       .sort((a, b) => a.x - b.x)
       .map((c) => {
-        fieldMap[c.field] = fieldLabel(c.field, customFields);
-        const lbl = fieldLabel(c.field, customFields);
+        const fList = (c.fields && c.fields.length ? c.fields : [c.field]).filter(Boolean);
+        const primary = fList[0] || c.field;
+        const lbl = fieldLabel(primary, customFields);
+        const hdr = c.headerText || lbl;
+        for (const fk of fList) {
+          fieldMap[fk] = c.headerText || fieldLabel(fk, customFields);
+        }
         return {
-          field: c.field,
-          fields: [c.field],
+          field: primary,
+          fields: fList,
           label: lbl,
-          header_text: c.headerText || lbl,
+          header_text: hdr,
           x: Number(clamp01(c.x).toFixed(4)),
           w: Number(Math.max(0.008, Math.min(1 - clamp01(c.x), c.w)).toFixed(4)),
         };

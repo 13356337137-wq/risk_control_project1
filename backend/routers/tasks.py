@@ -140,6 +140,7 @@ def compose_task(
     period_end: str | None = Form(None),
     source_ref: str | None = Form(None),
     bank_code: str | None = Form(None),
+    consent_version: str | None = Form("PIPL-v2026.1"),
     db: Session = Depends(get_session),
     user: User = Depends(current_user),
 ):
@@ -169,6 +170,7 @@ def compose_task(
     return create_task(
         file=upload, password=password, period_start=period_start,
         period_end=period_end, source_ref=source_ref, bank_code=bank_code,
+        consent_version=consent_version,
         db=db, user=user,
     )
 
@@ -182,6 +184,7 @@ def create_task(
     source_ref: str | None = Form(None),
     bank_code: str | None = Form(None),
     marks: str | None = Form(None, description="临时模板：本次专用的标注 JSON，不写回模板库"),
+    consent_version: str | None = Form("PIPL-v2026.1"),
     db: Session = Depends(get_session),
     user: User = Depends(current_user),
 ):
@@ -301,6 +304,7 @@ def create_task(
             raise HTTPException(400, detail={"code": "E_PARAM", "message": "临时标注必须是非空数组"})
         override_json = _json.dumps(parsed_marks, ensure_ascii=False)
 
+    clean_consent = (consent_version or "PIPL-v2026.1").strip()[:32]
     task = Task(
         biz_no=f"T{datetime.now():%Y%m%d%H%M%S}{uuid.uuid4().hex[:4]}",
         user_id=user.id,
@@ -311,6 +315,8 @@ def create_task(
         field_map_override=override_json,
         period_start=period_start or (preread.period_start if preread else None),
         period_end=period_end or (preread.period_end if preread else None),
+        consent_version=clean_consent,
+        consent_at=datetime.now(),
         check_result={
             "matched_template": matched_template,
             "template_match": {
@@ -439,6 +445,8 @@ def list_tasks(
                 "bank_name": bank_name,
                 "period_start": task.period_start,
                 "period_end": task.period_end,
+                "consent_version": task.consent_version,
+                "consent_at": task.consent_at.isoformat() if task.consent_at else None,
             })
         if date_from:
             safe_items = [i for i in safe_items if (i.get("created_at") or "") >= date_from]
@@ -785,6 +793,8 @@ def get_task(task_id: int, db: Session = Depends(get_session), user: User = Depe
         "carrier": task.carrier,
         "period_start": task.period_start,
         "period_end": task.period_end,
+        "consent_version": task.consent_version,
+        "consent_at": task.consent_at.isoformat() if task.consent_at else None,
         "created_at": task.created_at.isoformat() if task.created_at else None,
     }
     if user.role == "banker":
@@ -795,6 +805,28 @@ def get_task(task_id: int, db: Session = Depends(get_session), user: User = Depe
             task.failure_code if task.failure_code in _BORROWER_SAFE_FAILURE_CODES else None
         )
     return payload
+
+
+@router.post("/{task_id}/withdraw")
+def withdraw_consent(task_id: int, db: Session = Depends(get_session), user: User = Depends(current_user)):
+    """借款人撤回《个人信息授权》并软删除任务（banker 管理员亦可代为处置）。"""
+    task = db.get(Task, task_id)
+    if task is None or task.deleted_at is not None:
+        raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "任务不存在"})
+    if user.role != "banker" and task.user_id != user.id:
+        raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "任务不存在"})
+    if user.role == "banker" and not getattr(user, "is_admin", False) and task.user_id != user.id:
+        raise HTTPException(403, detail={"code": "E_FORBIDDEN", "message": "仅本人或管理员可撤回授权"})
+    task.deleted_at = datetime.now()
+    db.add(AuditLog(
+        actor_id=user.id,
+        action="withdraw_consent",
+        object_type="task",
+        object_id=task.id,
+        detail=f"biz={task.biz_no}; consent={task.consent_version or '-'}",
+    ))
+    db.commit()
+    return {"task_id": task.id, "withdrawn": True, "deleted_at": task.deleted_at.isoformat()}
 
 
 @router.get("/{task_id}/file", dependencies=[Depends(require_banker)])

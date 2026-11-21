@@ -1,4 +1,6 @@
 /** 报告里的小图表：只用 SVG，不引图表库（几百 KB 不值当，图形只有三四种）。 */
+import { useMemo } from 'react';
+import type { TxnRow } from '../api/banker';
 
 export function Bar({
   value,
@@ -165,3 +167,156 @@ export function AmountHistogram({ amounts }: { amounts: number[] }) {
     </table>
   );
 }
+
+const fmtMoney = (n: number) => n.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+
+const INSIGHT_CATS: [RegExp, string][] = [
+  [/工资|代发|薪/, '工资代发'],
+  [/利息|结息/, '利息'],
+  [/汇入|转入|入账/, '转入/汇入'],
+  [/汇出|转出|汇款/, '转出/汇款'],
+  [/消费|快捷|支付|商户/, '消费支付'],
+  [/还款|贷款/, '贷款还款'],
+  [/基金|理财|证券/, '投资理财'],
+  [/退|冲正/, '退款/冲正'],
+];
+
+function insightCatOf(summary: string | null): string {
+  if (!summary) return '其他';
+  for (const [re, label] of INSIGHT_CATS) if (re.test(summary)) return label;
+  return '其他';
+}
+
+/** 资金全景与逐笔余额走势/摘要结构图表。 */
+export function InsightSection({ txns }: { txns: TxnRow[] }) {
+  const insight = useMemo(() => {
+    const monthsMap = new Map<string, { income: number; expense: number }>();
+    const catMap = new Map<string, number>();
+    const balancePoints: { date: string; balance: number }[] = [];
+    let income = 0;
+    let expense = 0;
+    let maxIn: { date: string; amount: number; summary: string | null } | undefined;
+    let maxOut: { date: string; amount: number; summary: string | null } | undefined;
+    let minBalance: { date: string; balance: number } | undefined;
+
+    for (const t of txns) {
+      const amt = t.amount === null ? Number.NaN : Number(t.amount);
+      const dir = t.direction === 'in' ? 'in' : t.direction === 'out' ? 'out' : null;
+      if (!Number.isNaN(amt) && dir) {
+        const m = t.txn_date ? t.txn_date.slice(0, 7) : '未知';
+        const cell = monthsMap.get(m) ?? { income: 0, expense: 0 };
+        if (dir === 'in') {
+          cell.income += amt;
+          income += amt;
+          if (amt > 0 && (!maxIn || amt > maxIn.amount)) maxIn = { date: t.txn_date ?? '', amount: amt, summary: t.summary };
+        } else {
+          cell.expense += amt;
+          expense += amt;
+          if (!maxOut || amt > maxOut.amount) maxOut = { date: t.txn_date ?? '', amount: amt, summary: t.summary };
+        }
+        monthsMap.set(m, cell);
+        const cat = insightCatOf(t.summary);
+        catMap.set(cat, (catMap.get(cat) ?? 0) + Math.abs(amt));
+      }
+      const bal = t.balance === null ? Number.NaN : Number(t.balance);
+      if (!Number.isNaN(bal) && t.txn_date) {
+        balancePoints.push({ date: t.txn_date, balance: bal });
+        if (!minBalance || bal < minBalance.balance) minBalance = { date: t.txn_date, balance: bal };
+      }
+    }
+
+    return {
+      months: [...monthsMap.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([month, v]) => ({ month, income: String(v.income), expense: String(v.expense) })),
+      balancePoints,
+      categories: [...catMap.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([name, amount]) => ({ name, amount })),
+      count: txns.length,
+      income,
+      expense,
+      net: income - expense,
+      maxIn,
+      maxOut,
+      minBalance,
+    };
+  }, [txns]);
+
+  if (txns.length === 0) return null;
+
+  const pts = insight.balancePoints;
+  const W = 720;
+  const H = 200;
+  const PAD = { l: 56, r: 16, t: 16, b: 28 };
+  const iw = W - PAD.l - PAD.r;
+  const ih = H - PAD.t - PAD.b;
+  const maxBal = Math.max(1, ...pts.map((p) => p.balance));
+  const minBal = Math.min(0, ...pts.map((p) => p.balance));
+  const bx = (i: number) => PAD.l + (pts.length <= 1 ? iw / 2 : (i / (pts.length - 1)) * iw);
+  const by = (v: number) => PAD.t + ih - ((v - minBal) / (maxBal - minBal || 1)) * ih;
+  const path = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${bx(i).toFixed(1)},${by(p.balance).toFixed(1)}`).join(' ');
+  const totalFlow = insight.income + insight.expense || 1;
+  const maxCat = Math.max(1, ...insight.categories.map((c) => c.amount));
+
+  return (
+    <section style={{ marginTop: 12 }}>
+      <h2>资金全景（明细全量统计）</h2>
+      <div className="tiles">
+        <div className="tile"><div className="tile-label">交易笔数</div><div className="tile-value">{insight.count} 笔</div></div>
+        <div className="tile good"><div className="tile-label">期间收入</div><div className="tile-value">¥{fmtMoney(insight.income)}</div></div>
+        <div className="tile bad"><div className="tile-label">期间支出</div><div className="tile-value">¥{fmtMoney(insight.expense)}</div></div>
+        <div className={'tile ' + (insight.net >= 0 ? 'good' : 'bad')}>
+          <div className="tile-label">净流入</div>
+          <div className="tile-value">¥{fmtMoney(insight.net)}</div>
+        </div>
+        <div className="tile warn">
+          <div className="tile-label">最低余额</div>
+          <div className="tile-value">{insight.minBalance ? `¥${fmtMoney(insight.minBalance.balance)}` : '—'}</div>
+        </div>
+      </div>
+
+      <div className="chart-grid">
+        <div className="chart-card">
+          <h4>逐笔余额走势</h4>
+          {pts.length ? (
+            <svg viewBox={`0 0 ${W} ${H}`} className="chart" role="img" aria-label="余额走势">
+              {[0, 0.5, 1].map((k) => (
+                <g key={k}>
+                  <line x1={PAD.l} x2={W - PAD.r} y1={PAD.t + ih * k} y2={PAD.t + ih * k} stroke="#e6e9ef" />
+                  <text x={PAD.l - 8} y={PAD.t + ih * k + 4} textAnchor="end" fontSize="10" fill="#64748b">
+                    {fmtMoney(Math.round(maxBal - (maxBal - minBal) * k))}
+                  </text>
+                </g>
+              ))}
+              <path d={path} fill="none" stroke="#2563eb" strokeWidth="1.6" />
+            </svg>
+          ) : (
+            <p className="muted small">无可用余额点</p>
+          )}
+        </div>
+        <div className="chart-card">
+          <h4>摘要结构（按金额） & 重点事项</h4>
+          <div className="catbars">
+            {insight.categories.map((c) => (
+              <div key={c.name} className="catbar">
+                <span className="cat-name">{c.name}</span>
+                <span className="cat-track">
+                  <span className="cat-fill" style={{ width: `${(c.amount / maxCat) * 100}%` }} />
+                </span>
+                <span className="cat-val">¥{fmtMoney(c.amount)} ({((c.amount / totalFlow) * 100).toFixed(1)}%)</span>
+              </div>
+            ))}
+          </div>
+          <ul className="plain small muted" style={{ marginTop: 8 }}>
+            {insight.maxOut ? <li>最大单笔支出：{insight.maxOut.date} ¥{fmtMoney(insight.maxOut.amount)}（{insight.maxOut.summary ?? '—'}）</li> : null}
+            {insight.maxIn ? <li>最大单笔收入：{insight.maxIn.date} ¥{fmtMoney(insight.maxIn.amount)}（{insight.maxIn.summary ?? '—'}）</li> : null}
+            {insight.minBalance ? <li>余额最低点：{insight.minBalance.date} ¥{fmtMoney(insight.minBalance.balance)}</li> : null}
+          </ul>
+        </div>
+      </div>
+    </section>
+  );
+}
+

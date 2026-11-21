@@ -18,6 +18,8 @@ export type LabFeature = {
   form: string;
   body: unknown;
   version?: string;
+  description?: string;
+  category?: string;
 };
 
 export type LabSample = { name: string; group: string };
@@ -180,4 +182,27 @@ export function deleteCustom(code: string): Promise<{ code: string; deleted: boo
 
 export function evaluateCode(sample: string, code: string): Promise<EvaluateResult> {
   return request<EvaluateResult>('/lab/evaluate', { body: { sample, code }, timeoutMs: 60000 });
+}
+
+export type ComputeFileFeatureRecord = {
+  code: string;
+  name: string;
+  value: string | number | boolean | null;
+  unit: string;
+  reason: string;
+  version: string;
+};
+
+export type ComputeFileResult = {
+  file: string;
+  rows: number;
+  feature_count: number;
+  features: ComputeFileFeatureRecord[];
+};
+
+export function computeFileFeatures(file: Blob, fileName = 'sample.pdf', codes?: string[]): Promise<ComputeFileResult> {
+  const form = new FormData();
+  form.append('file', file, fileName);
+  if (codes && codes.length) form.append('codes', codes.join(','));
+  return request<ComputeFileResult>('/features/compute-file', { form, timeoutMs: 180000 });
 }

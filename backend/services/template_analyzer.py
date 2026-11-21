@@ -148,16 +148,100 @@ def _merge_close_words(words: list[_Word], gap: float = 2.5) -> list[_Word]:
     return merged
 
 
+def _merge_spaced_labels(words: list[_Word], max_gap: float = 14.0) -> list[_Word]:
+    """合并被空格或字体拆开的短中文标签（如 '户'+'名：' 或 '开户'+'行：XXX' → '开户行：XXX'）。"""
+    if len(words) < 2:
+        return words
+    out: list[_Word] = []
+    for w in words:
+        head = re.split(r"[:：]", w.text, maxsplit=1)[0]
+        if (
+            out
+            and ":" not in out[-1].text
+            and "：" not in out[-1].text
+            and w.x0 - out[-1].x1 <= max_gap
+            and len(out[-1].text) <= 2
+            and len(head) <= 2
+            and any("\u4e00" <= ch <= "\u9fff" for ch in out[-1].text)
+            and any("\u4e00" <= ch <= "\u9fff" for ch in head)
+        ):
+            prev = out[-1]
+            out[-1] = _Word(
+                text=prev.text + w.text,
+                x0=prev.x0,
+                x1=max(prev.x1, w.x1),
+                top=min(prev.top, w.top),
+                bottom=max(prev.bottom, w.bottom),
+            )
+        else:
+            out.append(w)
+    return out
+
+
+def _is_image_bytes(raw: bytes) -> bool:
+    return raw.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"RIFF"))
+
+
+def _ocr_fallback_pages(
+    raw: bytes,
+    page_indices: list[int],
+    password: str | None = None,
+) -> dict[int, tuple[list[_Word], tuple[float, float], str]]:
+    """对无文字层 PDF 页或图片使用 RapidOCR（ocr_words）取词，保持坐标系与页面尺寸一致。"""
+    from rc_platform.capabilities.layout import ocr_words  # noqa: PLC0415
+
+    ocr_list = ocr_words.read_pages_via_ocr(raw, dpi=180, password=password, page_indices=page_indices)
+    out: dict[int, tuple[list[_Word], tuple[float, float], str]] = {}
+    for pw in ocr_list:
+        ws = [
+            _Word(text=w.text.strip(), x0=float(w.x0), x1=float(w.x1), top=float(w.top), bottom=float(w.bottom))
+            for w in pw.words
+            if str(w.text or "").strip()
+        ]
+        txt = " ".join(w.text for w in ws)
+        out[pw.page_no] = (ws, (float(pw.width), float(pw.height)), txt)
+    return out
+
+
+def _extract_table_col_hints_fitz(pg) -> list[list[tuple[float, float]]]:
+    """用 PyMuPDF find_tables() 提取显式表格线的列边界提示。"""
+    try:
+        finder = pg.find_tables()
+        tables = getattr(finder, "tables", None) or []
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[list[tuple[float, float]]] = []
+    for tb in tables:
+        try:
+            cells = getattr(tb, "cells", None) or []
+            if not cells:
+                continue
+            # 收集每个单元格的 (x0, x1) 形成去重列边界
+            col_ranges = sorted({(round(float(c[0]), 1), round(float(c[2]), 1)) for c in cells if len(c) >= 4})
+            if len(col_ranges) >= 3:
+                out.append(col_ranges)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def _extract_pdf_words(
     raw: bytes,
     password: str | None = None,
     max_pages: int = 3,
-) -> tuple[list[list[_Word]], list[tuple[float, float]], int, str]:
-    """抽取前 max_pages 页词坐标与整页文本；优先 PyMuPDF，缺省自动回退 pdfplumber。"""
-    if raw[:4] != b"%PDF":
-        raise ValueError("模板智能字段分析目前仅支持 PDF 电子流水文件")
+) -> tuple[list[list[_Word]], list[tuple[float, float]], int, str, dict[str, Any]]:
+    """抽取前 max_pages 页词坐标、表格列线提示与整页文本；支持 PDF、加密 PDF、扫描 PDF 与图片。"""
+    if _is_image_bytes(raw):
+        ocr_map = _ocr_fallback_pages(raw, [0], password=None)
+        if 0 not in ocr_map or not ocr_map[0][0]:
+            raise ValueError("图片未识别出可用文字，请确认图片清晰度或改用标准流水 PDF")
+        ws, size, txt = ocr_map[0]
+        return [ws], [size], 1, txt, {"ocr_used": True, "engine": "rapidocr_image", "table_hints": [[]]}
 
-    # 1. 优先尝试 PyMuPDF
+    if raw[:4] != b"%PDF":
+        raise ValueError("不支持的文件格式，请上传 PDF 或 JPG/PNG 图片流水")
+
+    # 1. 优先尝试 PyMuPDF + find_tables()
     try:
         import pymupdf  # noqa: PLC0415
 
@@ -170,6 +254,8 @@ def _extract_pdf_words(
             pages_words: list[list[_Word]] = []
             page_sizes: list[tuple[float, float]] = []
             full_texts: list[str] = []
+            table_hints: list[list[list[tuple[float, float]]]] = []
+            need_ocr: list[int] = []
             for idx in range(min(total_pages, max_pages)):
                 pg = doc[idx]
                 mtx = pg.rotation_matrix
@@ -183,9 +269,39 @@ def _extract_pdf_words(
                 pages_words.append(ws)
                 page_sizes.append((float(pg.rect.width), float(pg.rect.height)))
                 full_texts.append(pg.get_text("text") or "")
-            return pages_words, page_sizes, total_pages, "\n".join(full_texts)
+                table_hints.append(_extract_table_col_hints_fitz(pg))
+                if len(ws) < 6:
+                    need_ocr.append(idx)
         finally:
             doc.close()
+
+        ocr_used = False
+        if need_ocr:
+            try:
+                ocr_map = _ocr_fallback_pages(raw, need_ocr, password=password)
+                for idx, (ows, osize, otxt) in ocr_map.items():
+                    if ows and idx < len(pages_words):
+                        # 将像素坐标按目标页面尺寸缩放对齐（若存在页面尺寸则归一化到点坐标）
+                        pw, ph = page_sizes[idx]
+                        ow, oh = osize
+                        sx = (pw / ow) if (pw > 0 and ow > 0) else 1.0
+                        sy = (ph / oh) if (ph > 0 and oh > 0) else 1.0
+                        pages_words[idx] = [
+                            _Word(text=w.text, x0=w.x0 * sx, x1=w.x1 * sx, top=w.top * sy, bottom=w.bottom * sy)
+                            for w in ows
+                        ]
+                        full_texts[idx] = otxt
+                        ocr_used = True
+            except Exception:  # noqa: BLE001 - OCR 不可用时保留原文
+                pass
+
+        return (
+            pages_words,
+            page_sizes,
+            total_pages,
+            "\n".join(full_texts),
+            {"ocr_used": ocr_used, "engine": "rapidocr+pymupdf" if ocr_used else "pymupdf+tables", "table_hints": table_hints},
+        )
     except ImportError:
         pass
 
@@ -215,7 +331,13 @@ def _extract_pdf_words(
                 pages_words.append(ws)
                 page_sizes.append((float(pg.width), float(pg.height)))
                 full_texts.append(pg.extract_text() or "")
-            return pages_words, page_sizes, total_pages, "\n".join(full_texts)
+            return (
+                pages_words,
+                page_sizes,
+                total_pages,
+                "\n".join(full_texts),
+                {"ocr_used": False, "engine": "pdfplumber", "table_hints": [[] for _ in pages_words]},
+            )
     except Exception as exc:  # noqa: BLE001
         if "password" in str(exc).lower() or "encrypt" in str(exc).lower():
             raise PermissionError("PDF 受口令保护，请提供正确的打开口令") from exc
@@ -276,48 +398,43 @@ def _match_keyword(token_text: str, keywords: list[str]) -> tuple[str, float] | 
 
 
 def _extract_inline_value(text: str, kw: str) -> str | None:
-    """处理「户名：张三」「卡号:6222...」这类标签与值粘在同一个词里的情况。"""
-    # 尝试按冒号切分
-    m = re.search(r"[:：]\s*(.+)$", text)
-    if m and m.group(1).strip():
-        return m.group(1).strip()
-    # 尝试去掉前缀关键词
+    """处理「户名：张三」「卡号/账号:6217...」「客户名称：刘先生」等标签与值粘连情况。"""
     idx = text.find(kw)
     if idx >= 0:
-        rest = text[idx + len(kw):].lstrip(" :：")
-        if rest:
-            return rest
+        rest = text[idx + len(kw):]
+        # 若标签后缀还有细分词和冒号（如「卡号/账号:6217...」或「客户名称：刘先生」），取冒号后的纯值
+        m_after = re.search(r"^[^:：]{0,8}[:：]\s*(.+)$", rest)
+        if m_after and m_after.group(1).strip():
+            return m_after.group(1).strip()
+        stripped = rest.lstrip(" :：")
+        if stripped:
+            return stripped
+    # 回退：未直接定位到 kw（如 1-edit 模糊命中），从最后一个冒号后取非时间戳文本
+    m = re.search(r"[:：]\s*([^:：]+)$", text)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
     return None
 
 
-def analyze_header_fields(
-    pages_words: list[list[_Word]],
-    page_sizes: list[tuple[float, float]],
+def _analyze_page_headers(
+    words: list[_Word],
+    pw: float,
+    ph: float,
     header_fields: list[dict[str, Any]],
+    *,
+    col_hints: list[list[tuple[float, float]]] | None = None,
+    page_no: int = 0,
+    slot: str = "first",
 ) -> dict[str, Any]:
-    """标题字段版式分析：表头行评分定位 + 相邻列间隙切分 + 数据行投影校正 + 试解析预览。"""
-    if not pages_words or not header_fields:
-        return {
-            "header_found": False,
-            "header_results": [],
-            "table_area": None,
-            "preview_rows": [],
-            "field_map": {},
-            "table_layout": None,
-            "header_y_pt": None,
-        }
+    """对单页做标题字段版式分析：合并拆字 + 表头定位 + 表格线/间隙切分 + 数据行投影。"""
+    lines = _group_lines(words, y_tol=3.5)
 
-    words0 = pages_words[0]
-    pw, ph = page_sizes[0]
-    lines0 = _group_lines(words0, y_tol=3.5)
-
-    # 1. 评分寻找最佳表头行（扫描前 30 行）
     best_line: _Line | None = None
     best_tokens: list[_Word] = []
     best_matches: dict[int, tuple[dict[str, Any], str, float]] = {}
     best_score = 0.0
 
-    for ln in lines0[:30]:
+    for ln in lines[:30]:
         tokens = _merge_close_words(ln.words, gap=3.0)
         line_matches: dict[int, tuple[dict[str, Any], str, float]] = {}
         used_fields: set[str] = set()
@@ -367,7 +484,12 @@ def analyze_header_fields(
             "header_y_pt": None,
         }
 
-    # 2. 基于整行全部表头词（不仅限于命中的字段）的相邻间隙切分列边界，防止跨列串读
+    # 结合 PyMuPDF find_tables() 显式格子线（若命中同一行多列表格），否则退回整行相邻间隙切分
+    flat_hints: list[tuple[float, float]] = []
+    if col_hints:
+        best_group = max(col_hints, key=len)
+        flat_hints = best_group
+
     tok_bounds: list[tuple[float, float]] = []
     n_tok = len(best_tokens)
     for i, tok in enumerate(best_tokens):
@@ -375,24 +497,26 @@ def analyze_header_fields(
         if i == 0:
             left = max(0.0, tok.x0 - 0.25 * tw)
         else:
-            prev = best_tokens[i - 1]
-            left = (prev.x1 + tok.x0) / 2.0
+            left = (best_tokens[i - 1].x1 + tok.x0) / 2.0
         if i == n_tok - 1:
             right = min(pw, tok.x1 + 0.6 * tw)
         else:
-            nxt = best_tokens[i + 1]
-            right = (tok.x1 + nxt.x0) / 2.0
+            right = (tok.x1 + best_tokens[i + 1].x0) / 2.0
+        # 若显式表格边框覆盖此表头中心，优先对齐表格纵线边界（防跨列串字）
+        for hx0, hx1 in flat_hints:
+            if hx0 <= tok.cx <= hx1 and (hx1 - hx0) >= 12.0 and (hx1 - hx0) <= pw * 0.48:
+                left, right = max(0.0, hx0), min(pw, hx1)
+                break
         if right <= left:
             left, right = tok.x0, max(tok.x1, tok.x0 + 12.0)
         tok_bounds.append((left, right))
 
-    # 3. 数据行投影：收集表头下方至页脚前的所有数据行，校验列边界并提取样例值
     header_top = best_line.top
     header_bottom = best_line.bottom
     data_lines: list[_Line] = []
     last_data_bottom = header_bottom + 20.0
 
-    for ln in lines0:
+    for ln in lines:
         if ln.top <= header_bottom + 1.0:
             continue
         txt = ln.text.strip()
@@ -403,21 +527,17 @@ def analyze_header_fields(
         data_lines.append(ln)
         last_data_bottom = max(last_data_bottom, ln.bottom)
 
-    # 4. 为每个命中的标题字段收集样例值、按数据投影略微扩展首尾边界
-    matched_cols: list[dict[str, Any]] = []
     field_map: dict[str, str] = {}
     col_specs: list[tuple[str, float, float, str, float]] = []
 
     for t_idx in sorted(best_matches.keys()):
         hf, _kw, conf = best_matches[t_idx]
         fkey = str(hf["field"]).strip()
-        flabel = str(hf.get("label") or fkey)
         tok = best_tokens[t_idx]
         left, right = tok_bounds[t_idx]
         col_specs.append((fkey, left, right, tok.text, conf))
         field_map[fkey] = tok.text
 
-    # 抽取前 15 行预览与每列样例
     samples_by_field: dict[str, list[str]] = {f: [] for f, *_ in col_specs}
     hits_by_field: dict[str, int] = {f: 0 for f, *_ in col_specs}
     preview_rows: list[dict[str, Any]] = []
@@ -434,7 +554,7 @@ def analyze_header_fields(
                     if len(samples_by_field[fkey]) < 4 and val not in samples_by_field[fkey]:
                         samples_by_field[fkey].append(val)
         if len(row_cells) >= 2 and len(preview_rows) < 15:
-            preview_rows.append({"page_no": 1, "cells": row_cells})
+            preview_rows.append({"page_no": page_no + 1, "cells": row_cells})
 
     matched_by_field = {f: (left, right, ht, cf) for f, left, right, ht, cf in col_specs}
     header_results: list[dict[str, Any]] = []
@@ -497,8 +617,8 @@ def analyze_header_fields(
         "headerY": header_y_norm,
     }
     table_layout = {
-        "page": 0,
-        "slot": "first",
+        "page": page_no,
+        "slot": slot,
         "area": {k: table_area[k] for k in ("x", "y", "w", "h")},
         "headerY": header_y_norm,
         "columns": layout_columns,
@@ -514,25 +634,209 @@ def analyze_header_fields(
     }
 
 
+def analyze_header_fields(
+    pages_words: list[list[_Word]],
+    page_sizes: list[tuple[float, float]],
+    header_fields: list[dict[str, Any]],
+    *,
+    table_hints: list[list[list[tuple[float, float]]]] | None = None,
+) -> dict[str, Any]:
+    """标题字段版式分析：定位首页与续页表头、融合表格边框与间隙切分列并输出预览。"""
+    if not pages_words or not header_fields:
+        return {
+            "header_found": False,
+            "header_results": [],
+            "table_area": None,
+            "preview_rows": [],
+            "field_map": {},
+            "table_layout": None,
+            "extra_tables": [],
+            "header_y_pt": None,
+        }
+
+    first = _analyze_page_headers(
+        pages_words[0],
+        page_sizes[0][0],
+        page_sizes[0][1],
+        header_fields,
+        col_hints=(table_hints[0] if table_hints else None),
+        page_no=0,
+        slot="first",
+    )
+    extra_tables: list[dict[str, Any]] = []
+    if first["header_found"] and len(pages_words) > 1:
+        base_hy = float((first["table_layout"] or {}).get("headerY") or 0)
+        for p_idx in range(1, min(len(pages_words), 3)):
+            if not pages_words[p_idx]:
+                continue
+            sub = _analyze_page_headers(
+                pages_words[p_idx],
+                page_sizes[p_idx][0],
+                page_sizes[p_idx][1],
+                header_fields,
+                col_hints=(table_hints[p_idx] if table_hints and p_idx < len(table_hints) else None),
+                page_no=p_idx,
+                slot="middle",
+            )
+            if sub["header_found"] and sub["table_layout"]:
+                sub_hy = float(sub["table_layout"].get("headerY") or 0)
+                if abs(sub_hy - base_hy) >= 0.04 or p_idx == 1:
+                    extra_tables.append(sub["table_layout"])
+                    break
+    first["extra_tables"] = extra_tables
+    return first
+
+
+_STD_HEADER_KEYS = {
+    "txn_date", "trade_time", "reference_no", "summary", "counterparty", "counterparty_name",
+    "direction", "amount", "amount_in", "amount_out", "balance", "currency", "channel", "account_no",
+}
+_STD_SHORT_KEYS = {
+    "account_no", "account_name", "bank_branch", "account_type", "period", "currency",
+}
+
+
+def _scan_short_field(
+    sf: dict[str, Any],
+    lines: list[_Line],
+    pw: float,
+    ph: float,
+    all_stop_kws: list[str],
+    page_no: int = 0,
+) -> tuple[float, dict[str, Any], dict[str, Any]] | None:
+    fkey = str(sf.get("field") or "").strip()
+    flabel = str(sf.get("label") or fkey)
+    kws = _split_keywords(sf.get("keywords") or flabel)
+    best_candidate: tuple[float, dict[str, Any], dict[str, Any]] | None = None
+    _title_noise = ("明细", "流水", "证明", "清单", "对账单")
+
+    for ln_idx, ln in enumerate(lines):
+        prep_words = _merge_spaced_labels(ln.words, max_gap=14.0)
+        for w_idx, w in enumerate(prep_words):
+            hit = _match_keyword(w.text, kws)
+            if not hit:
+                continue
+            kw_hit, conf = hit
+            has_colon = (":" in w.text) or ("：" in w.text)
+            if not has_colon and any(t in w.text for t in _title_noise) and len(w.text) >= len(kw_hit) + 4:
+                continue
+            inline_val = _extract_inline_value(w.text, kw_hit)
+            val_words: list[_Word] = [w]
+            method = "inline"
+
+            if inline_val:
+                right_extra: list[str] = [inline_val]
+                prev_x1 = w.x1
+                for nw in prep_words[w_idx + 1:]:
+                    if nw.x0 - prev_x1 > 28.0:
+                        break
+                    if _match_keyword(nw.text, [k for k in all_stop_kws if k not in kws]):
+                        break
+                    val_words.append(nw)
+                    right_extra.append(nw.text)
+                    prev_x1 = nw.x1
+                value = " ".join(right_extra).strip()
+            else:
+                method = "right_neighbor"
+                collected: list[_Word] = []
+                prev_x1 = w.x1
+                for nw in prep_words[w_idx + 1:]:
+                    if nw.text in (":", "："):
+                        prev_x1 = nw.x1
+                        continue
+                    gap_limit = 90.0 if not collected else 28.0
+                    if nw.x0 - prev_x1 > gap_limit:
+                        break
+                    if _match_keyword(nw.text, [k for k in all_stop_kws if k not in kws]):
+                        break
+                    collected.append(nw)
+                    prev_x1 = nw.x1
+                if collected:
+                    val_words = collected
+                    value = " ".join(x.text for x in collected).strip()
+                else:
+                    method = "below_neighbor"
+                    below_ws: list[_Word] = []
+                    if ln_idx + 1 < len(lines):
+                        next_ln = lines[ln_idx + 1]
+                        if 0 <= next_ln.top - ln.bottom <= 24.0:
+                            below_ws = [
+                                bw for bw in next_ln.words
+                                if bw.x1 >= w.x0 - 15.0 and bw.x0 <= w.x1 + 60.0
+                            ]
+                    if below_ws:
+                        val_words = below_ws
+                        value = " ".join(x.text for x in below_ws).strip()
+                    else:
+                        value = w.text
+
+            x0 = min(x.x0 for x in val_words)
+            y0 = min(x.top for x in val_words)
+            x1 = max(x.x1 for x in val_words)
+            y1 = max(x.bottom for x in val_words)
+            if method == "inline" and inline_val and len(w.text) > len(inline_val):
+                # 尽量将边框收缩到值区域起点，避免整段标签被圈进框内
+                label_ratio = max(0.0, min(0.75, 1.0 - len(inline_val) / max(1, len(w.text))))
+                x0 = min(w.x1 - 8.0, w.x0 + (w.x1 - w.x0) * label_ratio * 0.85)
+            rect = {
+                "x": round(max(0.0, x0 / pw), 4),
+                "y": round(max(0.0, y0 / ph), 4),
+                "w": round(min(1.0 - max(0.0, x0 / pw), max(0.02, (x1 - x0) / pw)), 4),
+                "h": round(min(1.0 - max(0.0, y0 / ph), max(0.015, (y1 - y0) / ph)), 4),
+            }
+            cand_score = conf + (0.25 if has_colon else 0.0)
+            if method == "inline" and has_colon:
+                cand_score += 0.20
+            elif method == "right_neighbor":
+                cand_score += 0.15
+            elif method == "below_neighbor":
+                cand_score += 0.05
+            cand_item = {
+                "field": fkey,
+                "label": flabel,
+                "keywords": kws,
+                "matched": True,
+                "anchor_text": w.text,
+                "value": value,
+                "page": page_no,
+                "rect": rect,
+                "method": method,
+                "confidence": round(min(1.0, conf), 2),
+            }
+            cand_box = {
+                "field": fkey,
+                "label": flabel,
+                "value": value,
+                "page": page_no,
+                **rect,
+            }
+            if best_candidate is None or cand_score > best_candidate[0]:
+                best_candidate = (cand_score, cand_item, cand_box)
+    return best_candidate
+
+
 def match_short_fields(
     pages_words: list[list[_Word]],
     page_sizes: list[tuple[float, float]],
     short_fields: list[dict[str, Any]],
     header_y_pt: float | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """短字段就近匹配：在首页页眉（表头上方，若无表头则整页）定位锚点词，就近提取右侧或下方值。"""
+    """短字段就近匹配：先在首页页眉定位，未命中时兜底扫描首页页尾及全页。"""
     if not pages_words or not short_fields:
         return [], []
 
     words0 = pages_words[0]
     pw, ph = page_sizes[0]
-    # 优先在表头上方页眉区检索，避免误命中明细行；若无表头则扫描全页
     zone_words = [w for w in words0 if header_y_pt is None or w.bottom <= header_y_pt + 4.0]
-    if not zone_words:
-        zone_words = words0
-    lines = _group_lines(zone_words, y_tol=4.5)
+    header_lines = _group_lines(zone_words or words0, y_tol=4.5)
+    # 兜底全页扫描时排除明细表头行本身（避免把表格列名「币种」「交易日期」误当独立短字段）
+    fallback_words = (
+        [w for w in words0 if w.bottom < header_y_pt - 2.0 or w.top > header_y_pt + 22.0]
+        if header_y_pt is not None
+        else words0
+    )
+    full_lines = _group_lines(fallback_words, y_tol=4.5)
 
-    # 收集所有短字段关键词用于“遇到下一个标签即停止合并值”
     all_stop_kws: list[str] = []
     for sf in short_fields:
         all_stop_kws.extend(_split_keywords(sf.get("keywords") or sf.get("label")))
@@ -544,114 +848,12 @@ def match_short_fields(
         fkey = str(sf.get("field") or "").strip()
         flabel = str(sf.get("label") or fkey)
         kws = _split_keywords(sf.get("keywords") or flabel)
-        best_candidate: tuple[float, dict[str, Any], dict[str, Any]] | None = None
-        _title_noise = ("明细", "流水", "证明", "清单", "对账单")
-
-        for ln_idx, ln in enumerate(lines):
-            # 1) 逐词定位锚点，按置信度与键值特征择优，避免被首页大标题（如「个人活期账户全部交易明细」）截胡
-            for w_idx, w in enumerate(ln.words):
-                hit = _match_keyword(w.text, kws)
-                if not hit:
-                    continue
-                kw_hit, conf = hit
-                has_colon = (":" in w.text) or ("：" in w.text)
-                if not has_colon and any(t in w.text for t in _title_noise) and len(w.text) >= len(kw_hit) + 4:
-                    continue
-                inline_val = _extract_inline_value(w.text, kw_hit)
-                val_words: list[_Word] = [w]
-                method = "inline"
-
-                if inline_val:
-                    # 仍向右检查是否有紧跟的续接词（如「起止日期：2026-04-14」后紧跟「— 2026-10-14」）
-                    right_extra: list[str] = [inline_val]
-                    prev_x1 = w.x1
-                    for nw in ln.words[w_idx + 1:]:
-                        if nw.x0 - prev_x1 > 28.0:
-                            break
-                        if _match_keyword(nw.text, [k for k in all_stop_kws if k not in kws]):
-                            break
-                        val_words.append(nw)
-                        right_extra.append(nw.text)
-                        prev_x1 = nw.x1
-                    value = " ".join(right_extra).strip()
-                else:
-                    # 2) 同行右侧就近匹配：跳过独立冒号，合并右侧连续值词直到大间隙或下一个标签
-                    method = "right_neighbor"
-                    collected: list[_Word] = []
-                    prev_x1 = w.x1
-                    for nw in ln.words[w_idx + 1:]:
-                        if nw.text in (":", "："):
-                            prev_x1 = nw.x1
-                            continue
-                        gap_limit = 90.0 if not collected else 28.0
-                        if nw.x0 - prev_x1 > gap_limit:
-                            break
-                        if _match_keyword(nw.text, [k for k in all_stop_kws if k not in kws]):
-                            break
-                        collected.append(nw)
-                        prev_x1 = nw.x1
-                    if collected:
-                        val_words = [w, *collected]
-                        value = " ".join(x.text for x in collected).strip()
-                    else:
-                        # 3) 正下方就近匹配（上下排版键值）
-                        method = "below_neighbor"
-                        below_ws: list[_Word] = []
-                        if ln_idx + 1 < len(lines):
-                            next_ln = lines[ln_idx + 1]
-                            if 0 <= next_ln.top - ln.bottom <= 24.0:
-                                below_ws = [
-                                    bw for bw in next_ln.words
-                                    if bw.x1 >= w.x0 - 15.0 and bw.x0 <= w.x1 + 60.0
-                                ]
-                        if below_ws:
-                            val_words = below_ws
-                            value = " ".join(x.text for x in below_ws).strip()
-                        else:
-                            value = w.text
-
-                x0 = min(x.x0 for x in val_words)
-                y0 = min(x.top for x in val_words)
-                x1 = max(x.x1 for x in val_words)
-                y1 = max(x.bottom for x in val_words)
-                rect = {
-                    "x": round(max(0.0, x0 / pw), 4),
-                    "y": round(max(0.0, y0 / ph), 4),
-                    "w": round(min(1.0 - max(0.0, x0 / pw), max(0.02, (x1 - x0) / pw)), 4),
-                    "h": round(min(1.0 - max(0.0, y0 / ph), max(0.015, (y1 - y0) / ph)), 4),
-                }
-                cand_score = conf + (0.25 if has_colon else 0.0)
-                if method == "inline" and has_colon:
-                    cand_score += 0.20
-                elif method == "right_neighbor":
-                    cand_score += 0.15
-                elif method == "below_neighbor":
-                    cand_score += 0.05
-                cand_item = {
-                    "field": fkey,
-                    "label": flabel,
-                    "keywords": kws,
-                    "matched": True,
-                    "anchor_text": w.text,
-                    "value": value,
-                    "page": 0,
-                    "rect": rect,
-                    "method": method,
-                    "confidence": round(min(1.0, conf), 2),
-                }
-                cand_box = {
-                    "field": fkey,
-                    "label": flabel,
-                    "value": value,
-                    "page": 0,
-                    **rect,
-                }
-                if best_candidate is None or cand_score > best_candidate[0]:
-                    best_candidate = (cand_score, cand_item, cand_box)
-
-        if best_candidate:
-            results.append(best_candidate[1])
-            meta_boxes.append(best_candidate[2])
+        best = _scan_short_field(sf, header_lines, pw, ph, all_stop_kws, page_no=0)
+        if best is None and header_y_pt is not None:
+            best = _scan_short_field(sf, full_lines, pw, ph, all_stop_kws, page_no=0)
+        if best:
+            results.append(best[1])
+            meta_boxes.append(best[2])
         else:
             results.append({
                 "field": fkey,
@@ -678,9 +880,16 @@ def analyze_template_fields(
     bank_code: str | None = None,
     filename: str | None = None,
 ) -> dict[str, Any]:
-    """端到端模板智能分析：先跑标题字段版式分析定表头，再在页眉区跑短字段就近匹配。"""
-    pages_words, page_sizes, page_count, full_text = _extract_pdf_words(raw, password=password, max_pages=3)
-    hdr_out = analyze_header_fields(pages_words, page_sizes, header_fields)
+    """端到端模板智能分析：标题字段多页版式分析 + 短字段全页就近匹配 + OCR/真实解析兜底。"""
+    pages_words, page_sizes, page_count, full_text, meta_info = _extract_pdf_words(
+        raw, password=password, max_pages=3,
+    )
+    hdr_out = analyze_header_fields(
+        pages_words,
+        page_sizes,
+        header_fields,
+        table_hints=meta_info.get("table_hints"),
+    )
 
     header_y_pt = hdr_out["header_y_pt"]
     if pages_words and header_y_pt is not None:
@@ -694,12 +903,29 @@ def analyze_template_fields(
     )
 
     pw, ph = page_sizes[0] if page_sizes else (595.0, 842.0)
-    tables = [hdr_out["table_layout"]] if hdr_out["table_layout"] else []
+    tables: list[dict[str, Any]] = []
+    if hdr_out["table_layout"]:
+        tables.append(hdr_out["table_layout"])
+    tables.extend(hdr_out.get("extra_tables") or [])
+
     header_sig = "|".join(
         str(c.get("header_text") or c.get("label") or "")
         for c in ((tables[0].get("columns") or []) if tables else [])
     )
     layout_hash = hashlib.sha256(header_sig.encode("utf-8")).hexdigest()[:16] if header_sig else ""
+
+    custom_fields: list[dict[str, str]] = []
+    seen_cf: set[str] = set()
+    for hf in header_fields:
+        fk = str(hf.get("field") or "").strip()
+        if fk and fk not in _STD_HEADER_KEYS and fk not in seen_cf:
+            seen_cf.add(fk)
+            custom_fields.append({"key": fk, "label": str(hf.get("label") or fk), "kind": "header"})
+    for sf in short_fields:
+        fk = str(sf.get("field") or "").strip()
+        if fk and fk not in _STD_SHORT_KEYS and fk not in seen_cf:
+            seen_cf.add(fk)
+            custom_fields.append({"key": fk, "label": str(sf.get("label") or fk), "kind": "short"})
 
     layout = {
         "page_size": {"w": round(pw, 1), "h": round(ph, 1)},
@@ -708,6 +934,7 @@ def analyze_template_fields(
         **({"layout_hash": layout_hash} if layout_hash else {}),
         "tables": tables,
         "meta_boxes": meta_boxes,
+        **({"custom_fields": custom_fields} if custom_fields else {}),
     }
 
     return {
@@ -715,6 +942,8 @@ def analyze_template_fields(
         "bank_name": detected_name,
         "page_count": page_count,
         "page_size": {"w": round(pw, 1), "h": round(ph, 1)},
+        "ocr_used": bool(meta_info.get("ocr_used")),
+        "engine": meta_info.get("engine") or "pymupdf",
         "header_found": hdr_out["header_found"],
         "short_results": short_results,
         "header_results": hdr_out["header_results"],

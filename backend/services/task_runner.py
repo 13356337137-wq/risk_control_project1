@@ -220,11 +220,17 @@ def run_task(task_id: int, password: str | None = None) -> dict:
             file_row.storage_path = str(path)
 
         task.carrier = result["carrier"]
+        header_meta = result.get("header_meta") or {}
+        if not task.period_start and header_meta.get("period_start"):
+            task.period_start = str(header_meta["period_start"])[:16]
+        if not task.period_end and header_meta.get("period_end"):
+            task.period_end = str(header_meta["period_end"])[:16]
         task.check_result = {
             **(task.check_result or {}),
             "warnings": result["warnings"],
             "self_check": result.get("self_check"),
             "preread": result.get("preread"),
+            "header_meta": header_meta or None,
             "footer_count": result.get("footer_count"),
             "parse_coverage": result.get("parse_coverage"),
             "material_count": len(material_blobs),

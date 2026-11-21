@@ -65,6 +65,27 @@ def _custom_field_stats(txns: list) -> list[dict]:
     return sorted(out, key=lambda x: -x["count"])
 
 
+def _extract_header_meta(headers: list) -> dict:
+    """提取模板/预读从页眉单值框读到的扩展元数据（含币种与自定义短字段）。"""
+    meta: dict = {}
+    extra: dict[str, str] = {}
+    for hdr in (headers or []):
+        for fname in ("account_no", "account_name", "bank_branch", "account_type", "currency", "period_start", "period_end"):
+            if fname in meta:
+                continue
+            hf = getattr(hdr, fname, None)
+            val = getattr(hf, "value", None) if hf is not None else hf
+            if val:
+                meta[fname] = str(val)
+        for k, hf in (getattr(hdr, "extra_fields", None) or {}).items():
+            val = getattr(hf, "value", None)
+            if val and k not in extra:
+                extra[k] = str(val)
+    if extra:
+        meta["extra_fields"] = extra
+    return meta
+
+
 def _append_custom_metrics(metrics, transactions):
     """把带 steps 的自定义指标算进指标集。失败时写进指标的 note，不给假 0。"""
     try:
@@ -250,6 +271,9 @@ def run_analysis(
     payload = json.loads(report.model_dump_json())
     # 模板自定义字段的汇总（有值笔数、合计、均值、样例），报告与看板都用它
     payload["custom_field_stats"] = _custom_field_stats(parsed.transactions or [])
+    header_meta = _extract_header_meta(getattr(parsed, "headers", None) or [])
+    if header_meta:
+        payload["header_meta"] = header_meta
 
     # 模板缺列要说清楚：否则用户看到的是一堆「不可算」指标，不知道是版式没标全
     from services.template_checks import missing_required  # noqa: PLC0415
@@ -311,6 +335,7 @@ def run_analysis(
         "footer_count": footer_count,
         "parse_coverage": parse_coverage,
         "warnings": list(parsed.warnings),
+        "header_meta": header_meta,
         "preread": preread.to_dict() if preread is not None else None,
         "self_check": {
             "status": self_check.status,

@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  disableTemplate,
+  duplicateTemplate,
   exportTemplateBlob,
   getTemplate,
+  getTemplateLayoutPng,
   getTemplateSample,
   getTemplateStats,
   previewTemplate,
+  publishTemplate,
   updateTemplateRequired,
   type TemplateDetail,
   type TemplatePreview,
@@ -46,10 +50,10 @@ export default function TemplateDetailPage() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [layoutImgUrl, setLayoutImgUrl] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadDetail = () => {
     setError('');
-    setMessage('');
     Promise.all([getTemplate(templateId), getTemplateStats(templateId)])
       .then(([detail, statistics]) => {
         setTemplate(detail);
@@ -57,7 +61,66 @@ export default function TemplateDetailPage() {
         setRequired(detail.required_fields ?? ['txn_date', 'amount', 'balance']);
       })
       .catch((err) => setError(getErrorMessage(err, 'banker')));
+  };
+
+  useEffect(() => {
+    setMessage('');
+    loadDetail();
+    let active = true;
+    let objUrl: string | null = null;
+    getTemplateLayoutPng(templateId, 0)
+      .then((blob) => {
+        if (!active) return;
+        objUrl = URL.createObjectURL(blob);
+        setLayoutImgUrl(objUrl);
+      })
+      .catch(() => setLayoutImgUrl(null));
+    return () => {
+      active = false;
+      if (objUrl) URL.revokeObjectURL(objUrl);
+    };
   }, [templateId]);
+
+  async function onPublish() {
+    setBusy(true);
+    setError('');
+    try {
+      await publishTemplate(templateId);
+      setMessage('已启用该模板（同银行其他启用版本已自动停用）。');
+      loadDetail();
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDisable() {
+    setBusy(true);
+    setError('');
+    try {
+      await disableTemplate(templateId);
+      setMessage('已停用该模板。');
+      loadDetail();
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDuplicate() {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await duplicateTemplate(templateId);
+      navigate('/bank/templates/' + res.id);
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function runPreviewBlob(blob: Blob) {
     setBusy(true);
@@ -143,7 +206,22 @@ export default function TemplateDetailPage() {
           <Button size="sm" onClick={() => navigate('/bank/annotate?templateId=' + template.id)}>
             在画布中编辑框选
           </Button>
-          <Link className="btn btn-ghost" to={'/bank/templates/' + template.id + '/layout'}>看版式图</Link>
+          {isAdmin && template.status !== 'enabled' && (
+            <Button size="sm" disabled={busy} onClick={() => void onPublish()}>
+              启用此版本
+            </Button>
+          )}
+          {isAdmin && template.status === 'enabled' && (
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void onDisable()}>
+              停用
+            </Button>
+          )}
+          {isAdmin && (
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void onDuplicate()}>
+              复制为新草稿
+            </Button>
+          )}
+          <Link className="btn btn-ghost" to={'/bank/templates/' + template.id + '/layout'}>看全页版式图</Link>
           <button type="button" className="btn btn-ghost" onClick={() => void onExport()}>导出 JSON</button>
           <Link className="btn btn-ghost" to="/bank/templates">回到列表</Link>
         </div>
@@ -158,6 +236,17 @@ export default function TemplateDetailPage() {
         <div className="score"><span className="score-value">{stats?.avg_txn_count ?? '—'}</span><span className="muted small">平均笔数</span></div>
         <div className="score"><span className="score-value">{stats?.zero_txn_tasks ?? 0}</span><span className="muted small">零笔任务</span></div>
       </section>
+
+      {layoutImgUrl && (
+        <section>
+          <h2>首页版式框选示意图</h2>
+          <img
+            src={layoutImgUrl}
+            alt="模板框选示意图"
+            style={{ maxWidth: '100%', maxHeight: 420, border: '1px solid var(--border, #d8dee9)', borderRadius: 8 }}
+          />
+        </section>
+      )}
 
       <section>
         <h2>试跑（不落库）</h2>
@@ -201,12 +290,16 @@ export default function TemplateDetailPage() {
               </div>
             </div>
 
-            {preview.meta && (preview.meta.account_no || preview.meta.account_name || preview.meta.bank_branch) ? (
+            {preview.meta && (preview.meta.account_no || preview.meta.account_name || preview.meta.bank_branch || preview.meta.currency || (preview.extra_meta && Object.keys(preview.extra_meta).length > 0)) ? (
               <div className="ann-meta-chips" style={{ marginBottom: 10 }}>
                 {preview.meta.account_no && <span className="ann-meta-chip">卡号/账号：<b>{preview.meta.account_no}</b></span>}
                 {preview.meta.account_name && <span className="ann-meta-chip">户名：<b>{preview.meta.account_name}</b></span>}
                 {preview.meta.bank_branch && <span className="ann-meta-chip">开户行：<b>{preview.meta.bank_branch}</b></span>}
                 {preview.meta.account_type && <span className="ann-meta-chip">账户类型：<b>{preview.meta.account_type}</b></span>}
+                {preview.meta.currency && <span className="ann-meta-chip">币种：<b>{preview.meta.currency}</b></span>}
+                {Object.entries(preview.extra_meta || {}).map(([k, v]) => (
+                  <span key={k} className="ann-meta-chip">{fieldName(k)}：<b>{v}</b></span>
+                ))}
               </div>
             ) : null}
 

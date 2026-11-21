@@ -108,13 +108,15 @@ def op_slope(x, *, notes=None):
 @operator("month_end_balances", family=NUMERIC, kind="agg", unit=YUAN, compat=False,
           detail="覆盖月内各月最后一天的日终余额（末月按账期末日截断）。")
 def op_month_end_balances(x, *, notes=None):
+    rows = _rows(x)
     series = op_daily_balances(x)
     if series is None:
-        return None
-    rows = _rows(x)
+        if notes is not None and rows:
+            notes.append("缺列：balance（或交易日期无法解析）")
+        return Series(name="month_end_balance", values=[], frame=None)
     period = _period(rows)
     if period is None:
-        return None
+        return Series(name="month_end_balance", values=[], frame=None)
     start, end = period
     days = [start + timedelta(days=index) for index in range((end - start).days + 1)]
     by_day = dict(zip(days, series.values))

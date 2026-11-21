@@ -1,27 +1,47 @@
 import { useEffect, useState } from 'react';
 import { type LabSample } from '../../api/lab';
-import { type TaskSummary } from '../../api/banker';
+import {
+  type HeaderFieldSpec,
+  type ShortFieldSpec,
+  type TaskSummary,
+  type TemplateRow,
+} from '../../api/banker';
 import { Button } from '../../ui/Button';
 import {
   allFieldOptions,
+  allSingleFieldOptions,
   BANK_OPTIONS,
+  bankLabel,
   BOX_COLORS,
+  DEFAULT_HEADER_FIELDS,
+  DEFAULT_SHORT_FIELDS,
   fieldLabel,
-  SINGLE_FIELD_OPTIONS,
   type ColumnBox,
   type CustomFieldOption,
   type SingleBox,
   type TableRegionBox,
 } from './types';
 
+export type ValidationIssue = {
+  code: string;
+  level: 'error' | 'warn';
+  message: string;
+  target?: { kind: 'region' | 'col' | 'single'; id: string };
+};
+
 type Props = {
   samples: LabSample[];
   tasks: TaskSummary[];
+  templates: TemplateRow[];
   sourceMode: 'sample' | 'file' | 'task' | 'template';
   sourceLabel: string;
   onSelectSample: (sampleName: string) => void;
   onSelectFile: (file: File) => void;
   onSelectTask: (taskId: number) => void;
+  onSelectTemplate: (templateId: number) => void;
+  keepLayoutOnUpload: boolean;
+  onToggleKeepLayout: (v: boolean) => void;
+  onAnalyzeFields: (shortSpecs: ShortFieldSpec[], headerSpecs: HeaderFieldSpec[]) => void;
   needPassword: boolean;
   password: string;
   onPasswordChange: (val: string) => void;
@@ -53,6 +73,7 @@ type Props = {
   onDryRun: () => void;
   onSaveTemplate: (publish: boolean) => void;
   onReparseTask?: () => void;
+  validationIssues: ValidationIssue[];
   editingTemplateId: number | null;
   editingTaskId: number | null;
   isAdmin: boolean;
@@ -62,11 +83,16 @@ type Props = {
 export function StepSidebar({
   samples,
   tasks,
+  templates,
   sourceMode,
   sourceLabel,
   onSelectSample,
   onSelectFile,
   onSelectTask,
+  onSelectTemplate,
+  keepLayoutOnUpload,
+  onToggleKeepLayout,
+  onAnalyzeFields,
   needPassword,
   password,
   onPasswordChange,
@@ -98,6 +124,7 @@ export function StepSidebar({
   onDryRun,
   onSaveTemplate,
   onReparseTask,
+  validationIssues,
   editingTemplateId,
   editingTaskId,
   isAdmin,
@@ -112,9 +139,18 @@ export function StepSidebar({
   const [addingCustomField, setAddingCustomField] = useState(false);
   const [newFieldCode, setNewFieldCode] = useState('');
   const [newFieldLabel, setNewFieldLabel] = useState('');
+  const [newFieldKind, setNewFieldKind] = useState<'header' | 'short'>('header');
   const [expandedColId, setExpandedColId] = useState<string | null>(null);
+  const [smartOpen, setSmartOpen] = useState(false);
+  const [shortSpecs, setShortSpecs] = useState<ShortFieldSpec[]>(() =>
+    DEFAULT_SHORT_FIELDS.map((item) => ({ ...item })),
+  );
+  const [headerSpecs, setHeaderSpecs] = useState<HeaderFieldSpec[]>(() =>
+    DEFAULT_HEADER_FIELDS.map((item) => ({ ...item })),
+  );
 
   const fieldOptions = allFieldOptions(customFields);
+  const singleOptions = allSingleFieldOptions(customFields);
   const activeRegionCols = columns
     .filter((c) => c.regionId === activeRegionId)
     .sort((a, b) => a.x - b.x);
@@ -122,9 +158,16 @@ export function StepSidebar({
   const handleCreateCustomField = () => {
     const label = newFieldLabel.trim();
     if (!label) return;
+    const prefix = newFieldKind === 'short' ? 'short_' : 'custom_';
     const rawCode =
-      newFieldCode.trim().replace(/[^a-zA-Z0-9_]/g, '_') || 'custom_' + Date.now().toString(36).slice(-4);
-    onAddCustomField({ key: rawCode.toLowerCase(), label });
+      newFieldCode.trim().replace(/[^a-zA-Z0-9_]/g, '_') || prefix + Date.now().toString(36).slice(-4);
+    const key = rawCode.toLowerCase();
+    onAddCustomField({ key, label, kind: newFieldKind });
+    if (newFieldKind === 'short') {
+      setShortSpecs((prev) => (prev.some((s) => s.field === key) ? prev : [...prev, { field: key, label, keywords: label }]));
+    } else {
+      setHeaderSpecs((prev) => (prev.some((h) => h.field === key) ? prev : [...prev, { field: key, label, keywords: label }]));
+    }
     setNewFieldCode('');
     setNewFieldLabel('');
     setAddingCustomField(false);
@@ -150,10 +193,10 @@ export function StepSidebar({
         </div>
         <div className="ann-source-tabs">
           <label className="ann-file-btn">
-            上传 PDF / 图片
+            上传 PDF / 图片 / ZIP
             <input
               type="file"
-              accept=".pdf,image/png,image/jpeg,image/webp"
+              accept=".pdf,.zip,image/png,image/jpeg,image/webp"
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) onSelectFile(f);
@@ -161,6 +204,18 @@ export function StepSidebar({
               }}
             />
           </label>
+          <select
+            aria-label="从模板库载入"
+            value={editingTemplateId ? String(editingTemplateId) : ''}
+            onChange={(e) => e.target.value && onSelectTemplate(Number(e.target.value))}
+          >
+            <option value="">载入已有模板…</option>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                #{t.id} {bankLabel(t.bank_code)} v{t.version} ({t.status === 'enabled' ? '在用' : t.status === 'draft' ? '草稿' : '停用'})
+              </option>
+            ))}
+          </select>
           <select
             aria-label="选择内置样本"
             value={sourceMode === 'sample' ? sourceLabel : ''}
@@ -186,6 +241,16 @@ export function StepSidebar({
             ))}
           </select>
         </div>
+        {(columns.length > 0 || singles.length > 0) && (
+          <label className="inline-check small" style={{ marginTop: 6, display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={keepLayoutOnUpload}
+              onChange={(e) => onToggleKeepLayout(e.target.checked)}
+            />
+            <span>换样本或解锁时保留当前画布框选（方便给导入/无样本模板配参考文件）</span>
+          </label>
+        )}
         {sourceLabel && <div className="ann-source-current">当前：{sourceLabel}</div>}
         {needPassword && (
           <div className="ann-password-box">
@@ -280,9 +345,16 @@ export function StepSidebar({
 
         {addingCustomField && (
           <div className="ann-custom-field-form">
+            <select
+              value={newFieldKind}
+              onChange={(e) => setNewFieldKind(e.target.value as 'header' | 'short')}
+            >
+              <option value="header">标题字段（表格列）</option>
+              <option value="short">短字段（页眉单值）</option>
+            </select>
             <input
               type="text"
-              placeholder="中文列名（如 交易渠道 / 币种）"
+              placeholder={newFieldKind === 'short' ? '短字段名称（如 打印时间 / 客户经理）' : '中文列名（如 交易渠道 / 币种）'}
               value={newFieldLabel}
               onChange={(e) => setNewFieldLabel(e.target.value)}
             />
@@ -297,6 +369,114 @@ export function StepSidebar({
             </Button>
           </div>
         )}
+
+        <div style={{ marginBottom: 8 }}>
+          <button
+            type="button"
+            className="ann-link-btn"
+            onClick={() => setSmartOpen((v) => !v)}
+          >
+            {smartOpen ? '▾ 收起两类字段智能分析面板' : '▸ 输入「短字段 + 标题字段」调算法自动框选'}
+          </button>
+          {smartOpen && (
+            <div style={{ marginTop: 6, padding: 8, border: '1px solid #d8dee9', borderRadius: 6, background: '#f8fafc', fontSize: 12 }}>
+              <div className="small muted" style={{ marginBottom: 4 }}>
+                短字段（就近匹配页眉键值）：
+              </div>
+              {shortSpecs.map((sf, idx) => (
+                <div key={idx} style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                  <input
+                    style={{ width: 72, fontSize: 11 }}
+                    value={sf.label}
+                    placeholder="字段名"
+                    onChange={(e) =>
+                      setShortSpecs((p) => p.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))
+                    }
+                  />
+                  <input
+                    style={{ flex: 1, fontSize: 11 }}
+                    value={sf.keywords}
+                    placeholder="锚点词（逗号分隔）"
+                    onChange={(e) =>
+                      setShortSpecs((p) => p.map((x, i) => (i === idx ? { ...x, keywords: e.target.value } : x)))
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="ann-mini-btn danger"
+                    onClick={() => setShortSpecs((p) => p.filter((_, i) => i !== idx))}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', margin: '4px 0 6px' }}>
+                <button
+                  type="button"
+                  className="ann-link-btn"
+                  onClick={() =>
+                    setShortSpecs((p) => [...p, { field: `short_${p.length + 1}`, label: '', keywords: '' }])
+                  }
+                >
+                  + 加短字段
+                </button>
+              </div>
+              <div className="small muted" style={{ marginBottom: 4 }}>
+                标题字段（版式分析明细列）：
+              </div>
+              {headerSpecs.map((hf, idx) => (
+                <div key={idx} style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                  <input
+                    style={{ width: 72, fontSize: 11 }}
+                    value={hf.label}
+                    placeholder="列名"
+                    onChange={(e) =>
+                      setHeaderSpecs((p) => p.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))
+                    }
+                  />
+                  <input
+                    style={{ flex: 1, fontSize: 11 }}
+                    value={hf.keywords}
+                    placeholder="表头词（逗号分隔）"
+                    onChange={(e) =>
+                      setHeaderSpecs((p) => p.map((x, i) => (i === idx ? { ...x, keywords: e.target.value } : x)))
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="ann-mini-btn danger"
+                    onClick={() => setHeaderSpecs((p) => p.filter((_, i) => i !== idx))}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="ann-link-btn"
+                  onClick={() =>
+                    setHeaderSpecs((p) => [...p, { field: `col_${p.length + 1}`, label: '', keywords: '' }])
+                  }
+                >
+                  + 加标题字段
+                </button>
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() =>
+                    onAnalyzeFields(
+                      shortSpecs.filter((x) => x.field.trim() && (x.label.trim() || x.keywords.trim())),
+                      headerSpecs.filter((x) => x.field.trim() && (x.label.trim() || x.keywords.trim())),
+                    )
+                  }
+                >
+                  {busy ? '分析中…' : '执行智能识别并画框'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="ann-spread-row">
           <input
@@ -370,6 +550,40 @@ export function StepSidebar({
                       <div>
                         位置：x {(col.x * 100).toFixed(1)}% · 宽 {(col.w * 100).toFixed(1)}% · 来源 {col.source}
                       </div>
+                      <label style={{ display: 'block', fontSize: 11, marginTop: 4 }} onClick={(e) => e.stopPropagation()}>
+                        原件表头文本：
+                        <input
+                          style={{ width: '100%', fontSize: 11, marginTop: 2 }}
+                          value={col.headerText ?? ''}
+                          placeholder={fieldLabel(col.field, customFields)}
+                          onChange={(e) => onUpdateColumn(col.id, { headerText: e.target.value })}
+                        />
+                      </label>
+                      <div style={{ marginTop: 4, fontSize: 11 }} onClick={(e) => e.stopPropagation()}>
+                        一列多字段（可选合并绑定）：
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+                          {fieldOptions.slice(0, 10).map((opt) => {
+                            const fList = col.fields?.length ? col.fields : [col.field];
+                            const checked = fList.includes(opt.key);
+                            return (
+                              <label key={opt.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={checked && fList.length === 1}
+                                  onChange={() => {
+                                    const next = checked
+                                      ? fList.filter((k) => k !== opt.key)
+                                      : [...fList, opt.key];
+                                    onUpdateColumn(col.id, { field: next[0] || col.field, fields: next });
+                                  }}
+                                />
+                                <span>{opt.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
                       {col.cells.length > 0 && (
                         <ul>
                           {col.cells.slice(0, 6).map((c, i) => (
@@ -406,11 +620,11 @@ export function StepSidebar({
                   <select
                     value={s.field}
                     onChange={(e) => {
-                      const opt = SINGLE_FIELD_OPTIONS.find((o) => o.key === e.target.value);
+                      const opt = singleOptions.find((o) => o.key === e.target.value);
                       onUpdateSingle(s.id, { field: e.target.value, label: opt?.label || e.target.value });
                     }}
                   >
-                    {SINGLE_FIELD_OPTIONS.map((opt) => (
+                    {singleOptions.map((opt) => (
                       <option key={opt.key} value={opt.key}>
                         {opt.label}
                       </option>
@@ -487,21 +701,49 @@ export function StepSidebar({
               仅用于任务 #{editingTaskId} 重解析
             </Button>
           )}
+          {validationIssues.length > 0 && (
+            <div style={{ border: '1px solid #f59e0b', background: '#fffbeb', borderRadius: 6, padding: 8, fontSize: 12 }}>
+              <strong style={{ display: 'block', marginBottom: 4 }}>保存前实时核对（{validationIssues.length}）</strong>
+              {validationIssues.map((iss, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    color: iss.level === 'error' ? '#b91c1c' : '#92400e',
+                    cursor: iss.target ? 'pointer' : 'default',
+                    marginBottom: 2,
+                  }}
+                  onClick={() => iss.target && onSelect(iss.target)}
+                >
+                  [{iss.code}] {iss.message}
+                </div>
+              ))}
+            </div>
+          )}
           <label className="ann-field" style={{ display: 'block' }}>
             <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>这份流水属于哪家银行（必填，保存时写入模板）</span>
-            <select
-              className="ann-input"
-              style={{ width: '100%', marginTop: 4 }}
-              value={BANK_OPTIONS.some((b) => b.code === bankCode) ? bankCode : ''}
-              onChange={(e) => onBankCodeChange(e.target.value)}
-            >
-              <option value="">请选择银行</option>
-              {BANK_OPTIONS.map((item) => (
-                <option key={item.code} value={item.code}>
-                  {item.label}（{item.code}）
-                </option>
-              ))}
-            </select>
+            {customBankMode ? (
+              <input
+                className="ann-input"
+                style={{ width: '100%', marginTop: 4 }}
+                placeholder="输入银行编码（如 BOB / HXB）"
+                value={bankCode}
+                onChange={(e) => onBankCodeChange(e.target.value.toUpperCase())}
+              />
+            ) : (
+              <select
+                className="ann-input"
+                style={{ width: '100%', marginTop: 4 }}
+                value={BANK_OPTIONS.some((b) => b.code === bankCode) ? bankCode : ''}
+                onChange={(e) => onBankCodeChange(e.target.value)}
+              >
+                <option value="">请选择银行</option>
+                {BANK_OPTIONS.map((item) => (
+                  <option key={item.code} value={item.code}>
+                    {item.label}（{item.code}）
+                  </option>
+                ))}
+              </select>
+            )}
           </label>
           <div className="ann-save-pair">
             <Button

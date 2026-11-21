@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { getThresholds, resetThresholds, saveThresholds, type ThresholdDef, type ThresholdHistoryItem } from '../../api/banker';
 import { getErrorMessage } from '../../api/errors';
 import { getUser } from '../../auth/store';
@@ -12,6 +13,7 @@ import { Notice } from '../../ui/Notice';
  * 所以这里改值只影响之后的分析。页面上把这句话写出来，避免有人以为改完历史会跟着变。
  */
 export default function ThresholdsPage() {
+  const { hash } = useLocation();
   const isAdmin = Boolean(getUser()?.is_admin);
   const [defs, setDefs] = useState<ThresholdDef[]>([]);
   const [values, setValues] = useState<Record<string, string | number | null>>({});
@@ -21,6 +23,17 @@ export default function ThresholdsPage() {
   const [note, setNote] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!hash || !defs.length) return;
+    const el = document.getElementById(hash.slice(1));
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [hash, defs]);
+
+  const dirtyCount = useMemo(
+    () => defs.filter((d) => String(values[d.key] ?? '') !== String(savedValues[d.key] ?? '')).length,
+    [defs, values, savedValues],
+  );
 
   const load = useCallback(() => {
     getThresholds()
@@ -101,7 +114,8 @@ export default function ThresholdsPage() {
         </div>
         {isAdmin ? (
           <div className="filters">
-            <Button variant="ghost" size="sm" onClick={() => setValues(savedValues)}>放弃修改</Button>
+            {dirtyCount > 0 ? <span className="pill warn">已改 {dirtyCount} 项未保存</span> : null}
+            <Button variant="ghost" size="sm" disabled={dirtyCount === 0} onClick={() => setValues(savedValues)}>放弃修改</Button>
             <Button variant="ghost" size="sm" onClick={() => void handleResetDefaults()}>恢复默认</Button>
             <Button onClick={() => void save()}>保存为新版本</Button>
           </div>
@@ -120,11 +134,14 @@ export default function ThresholdsPage() {
             </thead>
             <tbody>
               {defs.filter((item) => item.group === group).map((item) => (
-                <tr key={item.key} id={`def-${item.key}`}>
+                <tr key={item.key} id={`def-${item.key}`} className={hash === `#def-${item.key}` ? 'active-row' : ''}>
                   <td>
                     {item.label}
                     {!item.calibrated ? <span className="pill warn" style={{ marginLeft: 6, fontSize: 11 }}>未校准</span> : null}
                     <div className="muted small">{item.key} · 默认 {item.default ?? '空'}</div>
+                    {item.impacts?.length ? (
+                      <div className="muted small">影响：{item.impacts.join('、')}</div>
+                    ) : null}
                   </td>
                   <td>
                     <input

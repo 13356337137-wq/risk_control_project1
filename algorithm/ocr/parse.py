@@ -425,6 +425,21 @@ def _boxes_match_page(lines: list[Line], template: Template | None) -> bool:
     return max_x <= width * 1.2 and max_y <= height * 1.2
 
 
+def _strip_meta_prefix(text: str, box_label: str | None = None) -> str:
+    """去掉单值框里可能连带框住的标签前缀（如 '开户行：XXX' → 'XXX'）。"""
+    cleaned = text.strip()
+    m = re.match(r"^[^:：]{1,12}[:：]\s*(.+)$", cleaned)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    if box_label:
+        lbl = box_label.strip()
+        if lbl and cleaned.startswith(lbl):
+            rest = cleaned[len(lbl):].lstrip(" :：")
+            if rest:
+                return rest
+    return cleaned
+
+
 def _fill_header_from_boxes(
     header: PageHeader,
     page_no: int,
@@ -435,6 +450,12 @@ def _fill_header_from_boxes(
     if not _boxes_match_page(lines, template):
         return
     width, height = template.page_size  # type: ignore[misc]
+    raw_meta = (getattr(template, "layout", None) or {}).get("meta_boxes") or []
+    label_by_field = {
+        str(m.get("field") or ""): str(m.get("label") or "")
+        for m in raw_meta
+        if isinstance(m, dict)
+    }
     for box in template.meta_boxes:
         if box.page != page_no:
             continue
@@ -445,6 +466,7 @@ def _fill_header_from_boxes(
         compact = re.sub(r"\s+", "", text)
         bbox = _bbox(words)
         confidence = min(word.confidence for word in words)
+        box_label = label_by_field.get(box.field)
         if box.field == "account_no" and header.account_no is None:
             match = ACCOUNT_LABEL_RE.search(compact)
             value = _clean_account(match.group(1) if match else compact)
@@ -452,21 +474,21 @@ def _fill_header_from_boxes(
                 header.account_no = HeaderField(value=value, bbox=bbox, confidence=confidence)
         elif box.field == "account_name" and header.account_name is None:
             match = NAME_LABEL_RE.search(text)
-            value = _clean_name(match.group(1) if match else text)
+            value = _clean_name(match.group(1) if match else _strip_meta_prefix(text, box_label))
             if value:
                 header.account_name = HeaderField(value=value, bbox=bbox, confidence=confidence)
-        elif box.field == "bank_branch" and header.bank_branch is None:
-            value = _clean_name(text)
+        elif box.field in ("bank_branch", "branch") and header.bank_branch is None:
+            value = _clean_name(_strip_meta_prefix(text, box_label or "开户行"))
             if value and len(value) >= 2:
                 header.bank_branch = HeaderField(value=value, bbox=bbox, confidence=confidence)
         elif box.field == "account_type" and header.account_type is None:
-            value = _clean_name(text)
+            value = _clean_name(_strip_meta_prefix(text, box_label or "账户类型"))
             if value and len(value) >= 2:
                 header.account_type = HeaderField(value=value, bbox=bbox, confidence=confidence)
-        elif box.field == "currency" and hasattr(header, "currency") and getattr(header, "currency", None) is None:
-            value = _clean_name(text)
+        elif box.field == "currency" and header.currency is None:
+            value = _clean_name(_strip_meta_prefix(text, box_label or "币种"))
             if value:
-                setattr(header, "currency", HeaderField(value=value, bbox=bbox, confidence=confidence))
+                header.currency = HeaderField(value=value, bbox=bbox, confidence=confidence)
         elif box.field == "period" and header.period_start is None:
             match = PERIOD_RE.search(compact)
             if not match:
@@ -476,6 +498,10 @@ def _fill_header_from_boxes(
             if start and end:
                 header.period_start = HeaderField(value=start, bbox=bbox, confidence=confidence)
                 header.period_end = HeaderField(value=end, bbox=bbox, confidence=confidence)
+        elif box.field not in header.extra_fields:
+            value = _strip_meta_prefix(text, box_label).strip()
+            if value:
+                header.extra_fields[box.field] = HeaderField(value=value, bbox=bbox, confidence=confidence)
 
 
 def _page_header(
