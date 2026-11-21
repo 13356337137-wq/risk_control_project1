@@ -398,8 +398,93 @@ export function exportTemplateBlob(id: number): Promise<Blob> {
   return requestBlob('/templates/' + id + '/export');
 }
 
-export function importTemplate(payload: Record<string, unknown>): Promise<{ id: number; version: number; bank_code: string }> {
+export function importTemplate(
+  payload: Record<string, unknown> | Record<string, unknown>[],
+): Promise<{ id: number; version: number; bank_code: string; status?: string; count?: number; items?: { id: number; version: number; bank_code: string; status: string }[] }> {
   return request('/templates/import', { body: payload });
+}
+
+export type ShortFieldSpec = {
+  field: string;
+  label: string;
+  keywords: string;
+};
+
+export type HeaderFieldSpec = {
+  field: string;
+  label: string;
+  keywords: string;
+};
+
+export type ShortFieldMatch = {
+  field: string;
+  label: string;
+  keywords: string[];
+  matched: boolean;
+  anchor_text: string | null;
+  value: string | null;
+  page: number;
+  rect: { x: number; y: number; w: number; h: number } | null;
+  method: 'inline' | 'right_neighbor' | 'below_neighbor' | null;
+  confidence: number;
+};
+
+export type HeaderFieldMatch = {
+  field: string;
+  label: string;
+  keywords: string[];
+  matched: boolean;
+  header_text: string | null;
+  x: number | null;
+  w: number | null;
+  sample_values: string[];
+  hit_rows: number;
+  confidence: number;
+};
+
+export type TemplateAnalyzeResult = {
+  bank_code: string;
+  bank_name: string | null;
+  page_count: number;
+  page_size: { w: number; h: number };
+  header_found: boolean;
+  short_results: ShortFieldMatch[];
+  header_results: HeaderFieldMatch[];
+  table_area: { x: number; y: number; w: number; h: number; headerY: number } | null;
+  preview_rows: { page_no: number; cells: Record<string, string> }[];
+  field_map: Record<string, string>;
+  layout: Record<string, unknown>;
+  saved_template?: {
+    id: number;
+    bank_code: string;
+    version: number;
+    status: string;
+    has_sample: boolean;
+  };
+};
+
+export function analyzeTemplateFields(payload: {
+  file: File;
+  shortFields: ShortFieldSpec[];
+  headerFields: HeaderFieldSpec[];
+  bankCode?: string;
+  password?: string;
+  save?: boolean;
+  publish?: boolean;
+}): Promise<TemplateAnalyzeResult> {
+  const form = new FormData();
+  form.append('file', payload.file, payload.file.name || 'sample.pdf');
+  form.append('short_fields', JSON.stringify(payload.shortFields));
+  form.append('header_fields', JSON.stringify(payload.headerFields));
+  if (payload.bankCode?.trim()) form.append('bank_code', payload.bankCode.trim().toUpperCase());
+  if (payload.password) form.append('password', payload.password);
+  form.append('save', String(Boolean(payload.save)));
+  form.append('publish', String(Boolean(payload.publish)));
+  return request<TemplateAnalyzeResult>('/templates/analyze-fields', { form, timeoutMs: 180000 });
+}
+
+export function loadBuiltinTemplates(publish = false): Promise<{ loaded: { id: number; bank_code: string; version: number; status: string }[]; skipped: string[] }> {
+  return request(`/templates/load-builtin?publish=${publish ? 'true' : 'false'}`, { method: 'POST' });
 }
 
 export function previewTemplate(id: number, file: Blob, password?: string): Promise<TemplatePreview> {
@@ -440,7 +525,7 @@ export function restoreTemplate(id: number): Promise<{ id: number; restored: boo
   return request<{ id: number; restored: boolean }>('/templates/' + id + '/restore', { method: 'POST' });
 }
 
-export type ProbeSuggestion = { field: string; column: string; x: number; y: number };
+export type ProbeSuggestion = { field: string; column: string; x: number; y: number; x0?: number; x1?: number; col_x?: number; col_w?: number };
 export type ProbeResult = {
   bank_name: string | null;
   bank_code: string | null;

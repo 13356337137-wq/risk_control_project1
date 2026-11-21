@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path as _Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -75,8 +75,7 @@ def list_templates(bank_code: str | None = None, include_deleted: bool = False,
 def create_template(payload: TemplateIn, db: Session = Depends(get_session)):
     bank = payload.bank_code.upper()
     latest = db.execute(
-        select(func.max(Template.version)).where(
-            Template.bank_code == bank, Template.deleted_at.is_(None))
+        select(func.max(Template.version)).where(Template.bank_code == bank)
     ).scalar() or 0
     row = Template(
         bank_code=bank,
@@ -460,8 +459,7 @@ def infer_template_api(
         except Exception:  # noqa: BLE001
             file_id = None
         _latest = db.execute(
-            select(func.max(Template.version)).where(
-                Template.bank_code == bank_code.upper(), Template.deleted_at.is_(None))
+            select(func.max(Template.version)).where(Template.bank_code == bank_code.upper())
         ).scalar() or 0
         row = Template(bank_code=bank_code.upper(), version=_latest + 1, status="draft",
                        field_map=result["field_map"],
@@ -803,7 +801,7 @@ def save_template_from_canvas(
             sample_file_id = _store_sample(db, file.filename or "sample.pdf", data)
 
     latest = db.execute(
-        select(func.max(Template.version)).where(Template.bank_code == bank, Template.deleted_at.is_(None))
+        select(func.max(Template.version)).where(Template.bank_code == bank)
     ).scalar() or 0
 
     can_publish = bool(publish and getattr(user, "is_admin", False))
@@ -887,30 +885,312 @@ def export_template(template_id: int, db: Session = Depends(get_session)):
     )
 
 
-@router.post("/import", dependencies=[Depends(require_admin)])
-def import_template(payload: dict, db: Session = Depends(get_session)):
-    bank = str(payload.get("bank_code") or "").upper()
+def _normalize_import_item(raw: dict) -> dict:
+    """兼容三种模板 JSON 格式并归一化为标准入库结构：
+    1) 平台导出格式 {bank_code, field_map, layout, header_columns, required_fields}
+    2) FieldMapV1 / schema_version=1 格式（如 cmb_template.json：顶层 tables/meta_boxes/page_size，无 field_map）
+    3) 列序号映射格式（如 icbc_template.json：{bank_code, field_map, header_columns}）
+    """
+    if not isinstance(raw, dict):
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "模板 JSON 必须是对象"})
+    bank = str(raw.get("bank_code") or "").strip().upper()
     if not bank:
-        raise HTTPException(400, detail={"code": "E_PARAM", "message": "缺少 bank_code"})
-    field_map = payload.get("field_map") or {}
-    if not isinstance(field_map, dict) or not field_map:
-        raise HTTPException(400, detail={"code": "E_PARAM", "message": "field_map 不能为空"})
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "缺少 bank_code（银行代码）"})
+
+    layout = raw.get("layout")
+    is_v1_top = (not layout) and (bool(raw.get("tables")) or bool(raw.get("meta_boxes")))
+    if is_v1_top:
+        is_one_based = int(raw.get("schema_version") or 0) == 1 or int(raw.get("page_base") or 0) == 1
+        norm_tables = []
+        for idx, tb in enumerate(raw.get("tables") or []):
+            p_raw = int(tb.get("page", 1 if is_one_based else 0))
+            p_zero = max(0, p_raw - 1) if is_one_based else max(0, p_raw)
+            area = tb.get("area") or {"x": 0.03, "y": 0.16, "w": 0.94, "h": 0.76}
+            hy = tb.get("headerY") if tb.get("headerY") is not None else tb.get("header_y", area.get("y", 0.16))
+            cols = []
+            for c in (tb.get("columns") or []):
+                f = str(c.get("field") or ((c.get("fields") or [""])[0]) or "").strip()
+                if not f:
+                    continue
+                cols.append({
+                    "field": f,
+                    "fields": [f],
+                    "label": c.get("label") or f,
+                    "header_text": c.get("header_text") or c.get("label") or f,
+                    "x": float(c.get("x", 0)),
+                    "w": float(c.get("w", 0.08)),
+                })
+            norm_tables.append({
+                "page": p_zero,
+                "slot": tb.get("slot") or ("first" if idx == 0 else "middle"),
+                "area": area,
+                "headerY": float(hy),
+                "columns": cols,
+            })
+        norm_meta = []
+        for mb in (raw.get("meta_boxes") or []):
+            rect = mb.get("rect") if isinstance(mb.get("rect"), dict) else mb
+            p_raw = int(mb.get("page", 1 if is_one_based else 0))
+            p_zero = max(0, p_raw - 1) if is_one_based else max(0, p_raw)
+            norm_meta.append({
+                "field": str(mb.get("field") or ""),
+                "label": str(mb.get("label") or mb.get("field") or ""),
+                "value": str(mb.get("value") or ""),
+                "page": p_zero,
+                "x": float(rect.get("x", 0)),
+                "y": float(rect.get("y", 0)),
+                "w": float(rect.get("w", 0.12)),
+                "h": float(rect.get("h", 0.03)),
+            })
+        norm_custom = [
+            {"key": str(cf.get("key") or cf.get("code") or ""), "label": str(cf.get("label") or cf.get("code") or "")}
+            for cf in (raw.get("custom_fields") or [])
+            if cf.get("key") or cf.get("code")
+        ]
+        layout = {
+            "page_size": raw.get("page_size") or {"w": 595.0, "h": 842.0},
+            "page_count": max(1, len(norm_tables)),
+            "page_base": 0,
+            "tables": norm_tables,
+            "meta_boxes": norm_meta,
+            **({"custom_fields": norm_custom} if norm_custom else {}),
+        }
+
+    field_map = dict(raw.get("field_map") or {})
+    if not field_map and isinstance(layout, dict):
+        for tb in (layout.get("tables") or []):
+            for c in (tb.get("columns") or []):
+                f = str(c.get("field") or ((c.get("fields") or [""])[0]) or "").strip()
+                if f and f not in field_map:
+                    field_map[f] = str(c.get("header_text") or c.get("label") or f)
+    if not field_map:
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "模板缺少 field_map 或 layout.tables.columns，无法导入"})
+
+    header_columns = raw.get("header_columns")
+    if not header_columns and isinstance(raw.get("match_rule"), dict):
+        header_columns = raw["match_rule"].get("header_fingerprint")
+    if not header_columns:
+        header_columns = [str(v) for v in field_map.values()]
+
+    return {
+        "bank_code": bank,
+        "field_map": field_map,
+        "header_columns": header_columns,
+        "layout": layout,
+        "required_fields": raw.get("required_fields") or ["txn_date", "amount", "balance"],
+        "publish": bool(raw.get("publish", False)),
+    }
+
+
+def _insert_imported_template(db: Session, norm: dict, can_publish: bool) -> Template:
+    bank = norm["bank_code"]
     latest = db.execute(select(func.max(Template.version)).where(Template.bank_code == bank)).scalar() or 0
     row = Template(
         bank_code=bank,
         version=latest + 1,
-        status="draft",
-        field_map=field_map,
-        header_columns=payload.get("header_columns"),
-        layout=payload.get("layout"),
-        required_fields=payload.get("required_fields"),
+        status="enabled" if can_publish else "draft",
+        field_map=norm["field_map"],
+        header_columns=norm["header_columns"],
+        layout=norm["layout"],
+        required_fields=norm["required_fields"],
     )
+    if can_publish:
+        others = db.execute(
+            select(Template).where(Template.bank_code == bank, Template.deleted_at.is_(None))
+        ).scalars().all()
+        for o in others:
+            if o.status == "enabled":
+                o.status = "disabled"
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    db.flush()
     _audit_template(db, "import_template", row.id, f"导入 {bank} v{row.version}")
+    return row
+
+
+@router.post("/import", dependencies=[Depends(require_banker)])
+def import_template(
+    # 必须显式 Body(...)：FastAPI 会把裸 dict|list 当成内嵌字段 payload，
+    # 于是标准导出 JSON 直接 422 Field required（上一版就是这里坏掉的）
+    payload: dict | list = Body(...),
+    db: Session = Depends(get_session),
+    user=Depends(require_banker),
+):
+    """导入单个或批量模板 JSON（同时兼容导出格式、schema_version=1 框选格式与列序号格式）。"""
+    if isinstance(payload, list):
+        raw_items = payload
+        top_publish = False
+    elif isinstance(payload, dict) and isinstance(payload.get("templates"), list):
+        raw_items = payload["templates"]
+        top_publish = bool(payload.get("publish", False))
+    else:
+        raw_items = [payload]
+        top_publish = bool(payload.get("publish", False)) if isinstance(payload, dict) else False
+
+    if not raw_items:
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "导入内容为空"})
+    is_admin = bool(getattr(user, "is_admin", False))
+    created: list[dict] = []
+    for item in raw_items:
+        norm = _normalize_import_item(item)
+        can_pub = is_admin and (top_publish or norm["publish"])
+        row = _insert_imported_template(db, norm, can_pub)
+        created.append({"id": row.id, "version": row.version, "bank_code": row.bank_code, "status": row.status})
     db.commit()
-    return {"id": row.id, "version": row.version, "bank_code": row.bank_code}
+    first = created[0]
+    return {**first, "count": len(created), "items": created}
+
+
+@router.post("/load-builtin", dependencies=[Depends(require_banker)])
+def load_builtin_templates(
+    publish: bool = False,
+    force: bool = False,
+    db: Session = Depends(get_session),
+    user=Depends(require_banker),
+):
+    """一键载入系统内置的标准银行模板（工行/招行/建行），跳过库中已有活跃或草稿版本的银行。"""
+    samples_dir = _Path(__file__).resolve().parents[2] / "algorithm" / "integration" / "samples"
+    builtin_raws: list[dict] = []
+    if samples_dir.exists():
+        for fp in sorted(samples_dir.glob("*_template.json")):
+            try:
+                builtin_raws.append(json.loads(fp.read_text(encoding="utf-8")))
+            except Exception:  # noqa: BLE001
+                continue
+    # 补充建设银行标准电子版表头模板
+    builtin_raws.append({
+        "bank_code": "CCB",
+        "field_map": {
+            "txn_date": "记账日期",
+            "summary": "摘要",
+            "amount": "交易金额",
+            "balance": "账户余额",
+            "counterparty": "对方户名",
+        },
+        "header_columns": ["序号", "记账日期", "交易时间", "交易地点/附言", "摘要", "交易金额", "账户余额", "对方户名"],
+        "required_fields": ["txn_date", "amount", "balance"],
+    })
+    is_admin = bool(getattr(user, "is_admin", False))
+    can_pub = bool(publish and is_admin)
+    loaded: list[dict] = []
+    skipped: list[str] = []
+    for item in builtin_raws:
+        norm = _normalize_import_item(item)
+        bank = norm["bank_code"]
+        if not force:
+            exists = db.execute(
+                select(Template).where(Template.bank_code == bank, Template.deleted_at.is_(None))
+            ).scalars().first()
+            if exists is not None:
+                skipped.append(bank)
+                continue
+        row = _insert_imported_template(db, norm, can_pub)
+        loaded.append({"id": row.id, "bank_code": row.bank_code, "version": row.version, "status": row.status})
+    db.commit()
+    return {"loaded": loaded, "skipped": skipped}
+
+
+@router.post("/analyze-fields")
+def analyze_template_fields_api(
+    file: UploadFile = File(...),
+    short_fields: str = Form("[]", description="短字段 JSON 数组：[{field,label,keywords}]"),
+    header_fields: str = Form("[]", description="标题字段 JSON 数组：[{field,label,keywords}]"),
+    bank_code: str | None = Form(None),
+    password: str | None = Form(None),
+    save: bool = Form(False, description="是否直接保存为新模板版本"),
+    publish: bool = Form(False, description="保存时是否直接启用（仅管理员生效）"),
+    db: Session = Depends(get_session),
+    user=Depends(require_banker),
+):
+    """模板页一键调用模板分析算法：短字段就近匹配 + 标题字段版式分析，可选直接入库。"""
+    import json as _json
+
+    from services.template_analyzer import analyze_template_fields
+
+    try:
+        parsed_short = _json.loads(short_fields or "[]")
+        parsed_header = _json.loads(header_fields or "[]")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": f"字段配置不是合法 JSON：{exc}"}) from exc
+
+    if not isinstance(parsed_short, list) or not isinstance(parsed_header, list):
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "short_fields 与 header_fields 必须是 JSON 数组"})
+
+    data = file.file.read()
+    if not data:
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "上传的样例文件为空"})
+
+    try:
+        result = analyze_template_fields(
+            data,
+            parsed_short,
+            parsed_header,
+            password=password or None,
+            bank_code=bank_code or None,
+            filename=file.filename,
+        )
+    except PermissionError as exc:
+        raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
+    except ValueError as exc:
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": str(exc)}) from exc
+
+    if save:
+        field_map = result.get("field_map") or {}
+        if not field_map:
+            raise HTTPException(
+                400,
+                detail={"code": "E_EMPTY_MAP", "message": "未匹配到任何标题字段列，无法保存模板；请检查标题字段关键词或样例 PDF。"},
+            )
+        final_bank = str(result.get("bank_code") or "UNKNOWN").strip().upper() or "UNKNOWN"
+        sample_id = _store_sample(db, file.filename or "sample.pdf", data)
+        last_ver = db.execute(
+            select(func.max(Template.version)).where(Template.bank_code == final_bank)
+        ).scalar() or 0
+        is_admin = bool(getattr(user, "is_admin", False))
+        can_pub = bool(publish and is_admin)
+        if can_pub:
+            for prev in db.execute(
+                select(Template).where(
+                    Template.bank_code == final_bank,
+                    Template.status == "enabled",
+                    Template.deleted_at.is_(None),
+                )
+            ).scalars().all():
+                prev.status = "disabled"
+        header_cols = [
+            str(item["header_text"])
+            for item in (result.get("header_results") or [])
+            if item.get("matched") and item.get("header_text")
+        ]
+        req_fields = [k for k in ("txn_date", "amount", "balance") if k in field_map]
+        row = Template(
+            bank_code=final_bank,
+            version=int(last_ver) + 1,
+            status="enabled" if can_pub else "draft",
+            field_map=field_map,
+            header_columns=header_cols or None,
+            layout=result.get("layout"),
+            required_fields=req_fields or list(field_map.keys())[:3],
+            sample_file_id=sample_id,
+        )
+        db.add(row)
+        db.flush()
+        _audit_template(
+            db,
+            "template.analyze_save",
+            row.id,
+            f"bank={final_bank} v{row.version} status={row.status} cols={len(field_map)} metas={len((result.get('layout') or {}).get('meta_boxes') or [])}",
+        )
+        db.commit()
+        db.refresh(row)
+        result["saved_template"] = {
+            "id": row.id,
+            "bank_code": row.bank_code,
+            "version": row.version,
+            "status": row.status,
+            "has_sample": True,
+        }
+
+    return result
 
 
 def _store_sample(db: Session, filename: str, data: bytes) -> int:
