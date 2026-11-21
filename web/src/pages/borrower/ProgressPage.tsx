@@ -1,21 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { getTask, type TaskDetail } from '../../api/borrower';
+import { getTask, supplementTask, type TaskDetail } from '../../api/borrower';
 import { getErrorMessage } from '../../api/errors';
+import { Button } from '../../ui/Button';
 import { Notice } from '../../ui/Notice';
 
-/**
- * 借款侧进度页。
- *
- * 刻意只显示「到哪一步了」：结论、指标、风险都不给借款人看，这是产品口径，
- * 不是没做完——报告只有银行侧可见。
- */
 const STEPS: { key: string; label: string }[] = [
   { key: 'QUEUED', label: '已受理，等待开始' },
-  { key: 'CHECKING', label: '检查文件' },
+  { key: 'CHECKING', label: '检查文件完整性' },
   { key: 'PARSING', label: '识别流水明细' },
-  { key: 'VERIFYING', label: '核验真实性' },
-  { key: 'REPORTING', label: '生成结论' },
+  { key: 'VERIFYING', label: '核验材料真实性' },
+  { key: 'REPORTING', label: '生成审核资料' },
   { key: 'DONE', label: '处理完成' },
 ];
 
@@ -31,15 +26,15 @@ function stepIndex(status: string) {
 function failureText(code: string | null) {
   switch (code) {
     case 'E_FORMAT':
-      return '文件格式无法识别，请重新导出 PDF 后上传。';
+      return '文件格式无法识别，请从手机银行/网银重新导出原版 PDF 后上传。';
     case 'E_ENCRYPT':
-      return '文件有打开口令，请重新上传并填写口令。';
+      return '文件设有打开口令，请重新上传并填写正确的打开口令。';
     case 'E_NOT_STATEMENT':
-      return '这份文件不像银行流水，请上传对账单或交易明细。';
+      return '这份文件不是有效的银行交易流水，请确认后上传对账单或交易明细。';
     case 'E_NOLAYER':
-      return '这份文件像是截图或扫描件，无法作为有效材料。';
+      return '当前材料清晰度不足或缺少电子信息，请改传原版 PDF 或清晰完整的照片。';
     default:
-      return '处理未完成，请联系银行工作人员。';
+      return '处理未完成，请尝试重新上传原版材料或联系经办人员。';
   }
 }
 
@@ -48,6 +43,11 @@ export default function ProgressPage() {
   const taskId = Number(id);
   const [task, setTask] = useState<TaskDetail | null>(null);
   const [error, setError] = useState('');
+  const [supFile, setSupFile] = useState<File | null>(null);
+  const [supBusy, setSupBusy] = useState(false);
+  const [supNotice, setSupNotice] = useState('');
+
+  const fetchDetail = useCallback(() => getTask(taskId), [taskId]);
 
   useEffect(() => {
     if (!Number.isFinite(taskId)) return;
@@ -56,7 +56,7 @@ export default function ProgressPage() {
 
     const tick = async () => {
       try {
-        const detail = await getTask(taskId);
+        const detail = await fetchDetail();
         if (!alive) return;
         setTask(detail);
         setError('');
@@ -75,7 +75,25 @@ export default function ProgressPage() {
       alive = false;
       if (timer) window.clearTimeout(timer);
     };
-  }, [taskId]);
+  }, [taskId, fetchDetail]);
+
+  const handleSupplement = async () => {
+    if (!supFile) return;
+    setSupBusy(true);
+    setError('');
+    setSupNotice('');
+    try {
+      await supplementTask(taskId, supFile);
+      setSupFile(null);
+      setSupNotice('补充材料已上传，系统正在重新处理。');
+      const updated = await fetchDetail();
+      setTask(updated);
+    } catch (err) {
+      setError(getErrorMessage(err, 'borrower'));
+    } finally {
+      setSupBusy(false);
+    }
+  };
 
   const status = task?.status ?? 'PENDING';
   const current = stepIndex(status);
@@ -85,10 +103,12 @@ export default function ProgressPage() {
     <div className="panel">
       <h1>处理进度</h1>
       <p className="sub">
-        业务号 {task?.biz_no ?? '—'} · 提交时间 {task?.created_at ? new Date(task.created_at).toLocaleString() : '—'}
+        业务号 <span className="mono">{task?.biz_no ?? '—'}</span> · 提交时间{' '}
+        {task?.created_at ? new Date(task.created_at).toLocaleString() : '—'}
       </p>
 
       {error ? <Notice>{error}</Notice> : null}
+      {supNotice ? <Notice tone="ok">{supNotice}</Notice> : null}
 
       {failed ? (
         <Notice>{failureText(task?.failure_code ?? null)}</Notice>
@@ -107,16 +127,31 @@ export default function ProgressPage() {
       )}
 
       {status === 'NEED_SUPPLEMENT' ? (
-        <Notice tone="info">流水里有内容没读全，银行会联系你补充材料。</Notice>
+        <div className="supplement-box">
+          <Notice tone="info">当前材料部分页次不清晰或信息不完整，请补充清晰的原版 PDF 或照片。</Notice>
+          <div className="try-row" style={{ marginTop: 10 }}>
+            <input
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.webp"
+              onChange={(e) => setSupFile(e.target.files?.[0] ?? null)}
+            />
+            <Button size="sm" disabled={!supFile || supBusy} onClick={() => void handleSupplement()}>
+              {supBusy ? '上传中…' : '上传补充材料'}
+            </Button>
+          </div>
+        </div>
       ) : null}
 
       <div className="actions">
-        <Link className="btn btn-ghost" to="/app/upload">
-          再传一份
+        <Link className="btn" to="/app/upload">
+          {failed ? '重新上传材料' : '再传一份'}
+        </Link>
+        <Link className="btn btn-ghost" to="/app/tasks">
+          我的提交记录
         </Link>
       </div>
 
-      <p className="muted small">本页只显示处理进度；结论与指标由银行侧查看。</p>
+      <p className="muted small">本页只显示处理进度；审核结论与风险指标仅供银行工作人员查阅。</p>
     </div>
   );
 }

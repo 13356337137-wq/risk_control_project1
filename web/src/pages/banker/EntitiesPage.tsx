@@ -1,74 +1,364 @@
-import { useEffect, useState } from 'react';
-import { getEntities, type EntitiesPayload } from '../../api/banker';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  getEntities,
+  getEntitiesMerge,
+  getMergeMethods,
+  mergeTasks,
+  resolveEntityConflict,
+  undoEntityConflict,
+  type EntitiesPayload,
+  type MergeMethodInfo,
+} from '../../api/banker';
 import { getErrorMessage } from '../../api/errors';
+import { Button } from '../../ui/Button';
 import { Notice } from '../../ui/Notice';
 
-/**
- * 客户与账户。
- *
- * 同一客户在多家银行、多个账户下的流水，要先认出「是同一个人」才能合并看。
- * 这一版只做只读呈现：账户清单、已识别的客户、冲突待裁决项。
- * 合并动作（8 种口径）还没迁，页面里明说。
- */
+type ConflictItem = {
+  account_key?: string;
+  account_masked?: string;
+  bank_name?: string;
+  holders?: string[];
+  tasks?: number[];
+  message?: string;
+  resolved?: boolean;
+  resolution?: { subject: string; note?: string | null; at?: string | null } | null;
+};
+
+type MergeResult = {
+  subject?: string;
+  method?: { id: string; label: string; short: string; formula: string };
+  coverage?: {
+    months?: number;
+    overlap_months?: string[];
+    from?: string;
+    to?: string;
+    raw_txn_count?: number;
+    merged_txn_count?: number;
+    dropped_duplicates?: number;
+    internal_transfers?: number;
+  };
+  accounts?: {
+    task_id: number;
+    bank_name?: string;
+    account_masked?: string;
+    months?: number;
+    txn_count?: number;
+    balance_end?: string | null;
+    risk_hits?: number;
+    verdict?: string | null;
+  }[];
+  metrics?: { code: string; name: string; value: number | null; unit: string; how?: string }[];
+  risk?: { level?: string; hits?: number };
+  unsupported?: { code: string; name: string; reason: string }[];
+  warnings?: string[];
+  explain?: Record<string, string>;
+};
+
 export default function EntitiesPage() {
   const [data, setData] = useState<EntitiesPayload | null>(null);
+  const [methods, setMethods] = useState<MergeMethodInfo[]>([]);
+  const [selectedSubject, setSelectedSubject] = useState('');
+  const [selectedMethod, setSelectedMethod] = useState('union_dedup');
+  const [overlapMode, setOverlapMode] = useState('max');
+  const [mergeResult, setMergeResult] = useState<MergeResult | null>(null);
+  const [customTaskIds, setCustomTaskIds] = useState('');
+  const [conflictChoice, setConflictChoice] = useState<Record<string, { subject: string; note: string }>>({});
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const load = useCallback(() => {
+    Promise.all([getEntities(), getMergeMethods()])
+      .then(([ent, mRes]) => {
+        setData(ent);
+        setMethods(mRes.methods || []);
+        if (mRes.methods?.length && !mRes.methods.some((m) => m.id === selectedMethod)) {
+          setSelectedMethod(mRes.methods[0].id);
+        }
+        if (!selectedSubject && ent.subjects?.length) {
+          const firstKey = String((ent.subjects[0] as { key?: string; subject?: string }).key || ent.subjects[0].subject || '');
+          setSelectedSubject(firstKey);
+        }
+      })
+      .catch((err) => setError(getErrorMessage(err, 'banker')));
+  }, [selectedMethod, selectedSubject]);
 
   useEffect(() => {
-    getEntities()
-      .then(setData)
-      .catch((err) => setError(getErrorMessage(err, 'banker')));
-  }, []);
+    load();
+  }, [load]);
+
+  async function runSubjectMerge(subjectKey?: string) {
+    const sub = subjectKey ?? selectedSubject;
+    if (!sub) return;
+    setSelectedSubject(sub);
+    setBusy(true);
+    setError('');
+    try {
+      const res = await getEntitiesMerge(sub, selectedMethod, overlapMode);
+      setMergeResult(res as MergeResult);
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runTaskIdMerge() {
+    const ids = customTaskIds
+      .split(/[,，\s]+/)
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (!ids.length) {
+      setError('请输入至少一个有效任务编号（用逗号分隔）。');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const res = await mergeTasks(ids, selectedMethod);
+      setMergeResult(res as MergeResult);
+      setNotice(`已按「${selectedMethod}」口径合并任务 ${ids.join(', ')}。`);
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResolve(c: ConflictItem) {
+    if (!c.account_key) return;
+    const choice = conflictChoice[c.account_key];
+    const targetSubject = choice?.subject || c.holders?.[0] || '';
+    if (!targetSubject) return;
+    setBusy(true);
+    setError('');
+    try {
+      await resolveEntityConflict({ account_key: c.account_key, subject: targetSubject, note: choice?.note || undefined });
+      setNotice(`已签字确认账户 ${c.account_masked || c.account_key} 归属于「${targetSubject}」。`);
+      load();
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUndoConflict(accountKey: string) {
+    setBusy(true);
+    setError('');
+    try {
+      await undoEntityConflict(accountKey);
+      setNotice('已撤销人工归属裁决。');
+      load();
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const conflicts = (data?.conflicts ?? []) as ConflictItem[];
+  const subjects = (data?.subjects ?? []) as { key?: string; subject?: string; accounts?: Record<string, number> | string[]; tasks?: number[] }[];
 
   return (
     <div className="panel wide">
       <header className="panel-head">
         <div>
-          <h1>客户与账户</h1>
-          <p className="sub">账户按账号+户名归并；多账户客户可合并看全景。合并动作仍在旧版，本页只读。</p>
+          <h1>客户多账户合并与冲突裁决</h1>
+          <p className="sub">同客户多张卡自动识别内部互转与期间重叠，支持多口径合并测算；同卡异名冲突需审贷人员签字裁决。</p>
         </div>
       </header>
 
       {error ? <Notice>{error}</Notice> : null}
+      {notice ? <Notice tone="ok">{notice}</Notice> : null}
 
       {data ? (
         <section className="score-row">
-          <div className="score"><span className="score-value">{data.summary.accounts}</span><span className="muted small">账户</span></div>
-          <div className="score"><span className="score-value">{data.summary.subjects}</span><span className="muted small">客户</span></div>
+          <div className="score"><span className="score-value">{data.summary.accounts}</span><span className="muted small">已识别账户</span></div>
+          <div className="score"><span className="score-value">{data.summary.subjects}</span><span className="muted small">客户主体</span></div>
           <div className="score"><span className="score-value">{data.summary.multi_account_subjects}</span><span className="muted small">多账户客户</span></div>
-          <div className="score"><span className="score-value">{data.summary.conflicts}</span><span className="muted small">待裁决冲突</span></div>
+          <div className="score"><span className="score-value">{data.summary.conflicts}</span><span className="muted small">户名冲突数</span></div>
         </section>
       ) : null}
 
-      <h2>账户</h2>
-      <table className="grid compact">
-        <thead>
-          <tr><th>银行</th><th>账号</th><th>户名</th><th>任务</th></tr>
-        </thead>
-        <tbody>
-          {(data?.accounts ?? []).map((account) => (
-            <tr key={account.key}>
-              <td>{account.bank_name}</td>
-              <td className="small muted">{account.account_masked}</td>
-              <td>{Object.keys(account.holders ?? {}).join('、') || '—'}</td>
-              <td className="small muted">{(account.tasks ?? []).slice(0, 6).join('、')}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <section className="merge-workbench">
+        <h2>多账户合并分析工作台（{methods.length || 8} 种口径）</h2>
+        <div className="filters-bar">
+          <div className="filters">
+            <select value={selectedSubject} onChange={(e) => setSelectedSubject(e.target.value)} aria-label="选择客户主体">
+              <option value="">选择客户主体…</option>
+              {subjects.map((s) => {
+                const key = String(s.key || s.subject || '');
+                const taskCount = s.tasks?.length ?? 0;
+                return (
+                  <option key={key} value={key}>
+                    {key}（{taskCount} 份流水）
+                  </option>
+                );
+              })}
+            </select>
+            <select value={selectedMethod} onChange={(e) => setSelectedMethod(e.target.value)} aria-label="选择合并口径">
+              {methods.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label} · {m.short}
+                </option>
+              ))}
+            </select>
+            <select value={overlapMode} onChange={(e) => setOverlapMode(e.target.value)} aria-label="重叠处理">
+              <option value="max">重叠月取大</option>
+              <option value="avg">重叠月取均</option>
+              <option value="sum">重叠月相加</option>
+            </select>
+            <Button size="sm" disabled={busy || !selectedSubject} onClick={() => void runSubjectMerge()}>
+              {busy ? '计算中…' : '按主体合并'}
+            </Button>
+          </div>
+          <div className="filters">
+            <input
+              type="text"
+              placeholder="按任务ID合并，如 12,15"
+              value={customTaskIds}
+              onChange={(e) => setCustomTaskIds(e.target.value)}
+            />
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void runTaskIdMerge()}>
+              指定任务合并
+            </Button>
+          </div>
+        </div>
 
-      {data?.conflicts?.length ? (
-        <>
-          <h2>待裁决冲突（{data.conflicts.length}）</h2>
-          <ul className="plain">
-            {data.conflicts.slice(0, 8).map((item, index) => (
-              <li key={index}>
-                {String(item.subject ?? '未知客户')} · {String(item.reason ?? '同名/同账号冲突')}
-              </li>
+        {mergeResult && (
+          <div className="merge-result-card">
+            <div className="ann-preview-head">
+              <strong>
+                合并结果：{mergeResult.subject || '指定任务集'} · 口径「{mergeResult.method?.label || selectedMethod}」
+              </strong>
+              <span className="small muted">{mergeResult.method?.formula}</span>
+            </div>
+            {mergeResult.coverage && (
+              <div className="ann-meta-chips" style={{ marginBottom: 10 }}>
+                <span className="ann-meta-chip">原始笔数：<b>{mergeResult.coverage.raw_txn_count ?? '—'}</b></span>
+                <span className="ann-meta-chip">合并净笔数：<b>{mergeResult.coverage.merged_txn_count ?? '—'}</b></span>
+                <span className="ann-meta-chip">剔除重复/互转：<b>{(mergeResult.coverage.dropped_duplicates ?? 0) + (mergeResult.coverage.internal_transfers ?? 0)}</b></span>
+                <span className="ann-meta-chip">覆盖月数：<b>{mergeResult.coverage.months ?? 0}</b></span>
+              </div>
+            )}
+            {mergeResult.warnings?.length ? (
+              <div className="ann-preview-notes">
+                {mergeResult.warnings.map((w, i) => (
+                  <span key={i} className="pill warn">{w}</span>
+                ))}
+              </div>
+            ) : null}
+            {mergeResult.metrics?.length ? (
+              <table className="grid compact">
+                <thead><tr><th>指标代号</th><th>指标名称</th><th>合并值</th><th>单位</th><th>说明</th></tr></thead>
+                <tbody>
+                  {mergeResult.metrics.map((m) => (
+                    <tr key={m.code}>
+                      <td className="mono small">{m.code}</td>
+                      <td>{m.name}</td>
+                      <td className="mono">{m.value == null ? '—' : m.value.toFixed(2)}</td>
+                      <td className="small muted">{m.unit}</td>
+                      <td className="small muted">{m.how || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : null}
+          </div>
+        )}
+      </section>
+
+      {conflicts.length > 0 && (
+        <section>
+          <h2>账户归属冲突裁决（{conflicts.length}）</h2>
+          <table className="grid compact">
+            <thead>
+              <tr><th>账户</th><th>涉及户名</th><th>涉及任务</th><th>状态</th><th>人工裁决</th></tr>
+            </thead>
+            <tbody>
+              {conflicts.map((c, idx) => {
+                const key = c.account_key || String(idx);
+                const holders = c.holders || [];
+                const val = conflictChoice[key] || { subject: c.resolution?.subject || holders[0] || '', note: '' };
+                return (
+                  <tr key={key}>
+                    <td>
+                      <strong>{c.bank_name || '银行'}</strong>
+                      <div className="small muted mono">{c.account_masked || c.account_key}</div>
+                    </td>
+                    <td>{holders.join(' / ')}</td>
+                    <td className="small muted">{(c.tasks || []).join(', ')}</td>
+                    <td>
+                      {c.resolved ? (
+                        <span className="pill ok">已裁决：{c.resolution?.subject}</span>
+                      ) : (
+                        <span className="pill warn">待裁决</span>
+                      )}
+                    </td>
+                    <td>
+                      {c.resolved && c.account_key ? (
+                        <button type="button" className="link-btn" onClick={() => void handleUndoConflict(c.account_key as string)}>
+                          撤销裁决
+                        </button>
+                      ) : (
+                        <div className="filters">
+                          <select
+                            value={val.subject}
+                            onChange={(e) =>
+                              setConflictChoice((prev) => ({
+                                ...prev,
+                                [key]: { ...val, subject: e.target.value },
+                              }))
+                            }
+                          >
+                            {holders.map((h) => (
+                              <option key={h} value={h}>{h}</option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            placeholder="备注依据"
+                            value={val.note}
+                            onChange={(e) =>
+                              setConflictChoice((prev) => ({
+                                ...prev,
+                                [key]: { ...val, note: e.target.value },
+                              }))
+                            }
+                          />
+                          <Button size="sm" disabled={busy} onClick={() => void handleResolve(c)}>
+                            签字确认
+                          </Button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      <section>
+        <h2>已识别账户清单</h2>
+        <table className="grid compact">
+          <thead>
+            <tr><th>银行</th><th>账号（脱敏）</th><th>户名分布</th><th>涉及任务</th></tr>
+          </thead>
+          <tbody>
+            {(data?.accounts ?? []).map((account) => (
+              <tr key={account.key}>
+                <td>{account.bank_name}</td>
+                <td className="small muted mono">{account.account_masked}</td>
+                <td>{Object.keys(account.holders ?? {}).join('、') || '—'}</td>
+                <td className="small muted">{(account.tasks ?? []).slice(0, 8).join('、')}</td>
+              </tr>
             ))}
-          </ul>
-        </>
-      ) : null}
+          </tbody>
+        </table>
+      </section>
     </div>
   );
 }

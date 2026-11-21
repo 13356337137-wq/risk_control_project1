@@ -1,4 +1,4 @@
-import { request } from './client';
+import { request, requestBlob } from './client';
 
 /** 银行侧接口直出对象（没有 {code,data} 信封），与借款侧不同——合并前端时这一点最容易踩。 */
 
@@ -27,7 +27,16 @@ export type TaskSummary = {
 
 export type TaskList = { items: TaskSummary[]; total: number; facets: Record<string, Record<string, number>> };
 
-export type TaskFilters = { q?: string; authenticity?: string; limit?: number; offset?: number };
+export type TaskFilters = {
+  q?: string;
+  authenticity?: string;
+  status?: string;
+  bank?: string;
+  risk?: string;
+  trash?: boolean;
+  limit?: number;
+  offset?: number;
+};
 
 export function listTasks(filters: TaskFilters = {}): Promise<TaskList> {
   const params = new URLSearchParams();
@@ -35,7 +44,58 @@ export function listTasks(filters: TaskFilters = {}): Promise<TaskList> {
   if (filters.offset) params.set('offset', String(filters.offset));
   if (filters.q) params.set('q', filters.q);
   if (filters.authenticity) params.set('authenticity', filters.authenticity);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.bank) params.set('bank', filters.bank);
+  if (filters.risk) params.set('risk', filters.risk);
+  if (filters.trash) params.set('trash', '1');
   return request<TaskList>('/tasks?' + params.toString());
+}
+
+export function reanalyzeTask(
+  taskId: number,
+  opts: { password?: string; templateId?: number } = {},
+): Promise<{ task_id: number; status: string; queued: boolean; mode: string }> {
+  const form = new FormData();
+  if (opts.password) form.append('password', opts.password);
+  if (opts.templateId !== undefined) form.append('template_id', String(opts.templateId));
+  return request('/tasks/' + taskId + '/reanalyze', { form, timeoutMs: 120000 });
+}
+
+export function verifyTask(taskId: number): Promise<Record<string, unknown>> {
+  return request('/tasks/' + taskId + '/verify', { method: 'POST', timeoutMs: 180000 });
+}
+
+export function whitelistTask(taskId: number, reason: string): Promise<{ task_id: number; whitelisted: boolean }> {
+  const form = new FormData();
+  form.append('reason', reason);
+  return request('/tasks/' + taskId + '/whitelist', { form });
+}
+
+export function reparseTaskCanvas(
+  taskId: number,
+  payload: { fieldMap: Record<string, unknown>; layout: unknown; bankCode?: string },
+): Promise<{ task_id: number; status: string; mode: string }> {
+  const form = new FormData();
+  form.append('field_map', JSON.stringify(payload.fieldMap));
+  form.append('layout', JSON.stringify(payload.layout));
+  if (payload.bankCode) form.append('bank_code', payload.bankCode);
+  return request('/tasks/' + taskId + '/reparse', { form, timeoutMs: 120000 });
+}
+
+export function recycleTasks(taskIds: number[]): Promise<{ moved: number; ids: number[] }> {
+  return request('/tasks/recycle', { body: { task_ids: taskIds } });
+}
+
+export function restoreTasks(taskIds: number[]): Promise<{ restored: number; ids: number[] }> {
+  return request('/tasks/restore', { body: { task_ids: taskIds } });
+}
+
+export function purgeTasks(taskIds: number[]): Promise<{ purged: number; ids: number[] }> {
+  return request('/tasks/purge', { body: { task_ids: taskIds, confirm: true } });
+}
+
+export function getTaskExportBlob(taskId: number, format: 'json' | 'csv'): Promise<Blob> {
+  return requestBlob(format === 'json' ? `/tasks/${taskId}/export.json` : `/tasks/${taskId}/transactions.csv`);
 }
 
 export type ReportPayload = {
@@ -109,14 +169,9 @@ export function getTransactions(taskId: number): Promise<TxnRow[]> {
   return request<TxnRow[]>('/tasks/' + taskId + '/transactions?limit=2000');
 }
 
-/** 取任务原件（PDF 原始字节）；报告里的「原始文件」就是它。 */
-export async function getTaskFile(taskId: number): Promise<Blob> {
-  const token = localStorage.getItem('bs_token');
-  const response = await fetch('/api/v1/tasks/' + taskId + '/file', {
-    headers: token ? { Authorization: 'Bearer ' + token } : {},
-  });
-  if (!response.ok) throw new Error('取不到原件（' + response.status + '）');
-  return await response.blob();
+/** 取任务原件（PDF / 图片原始字节）；报告里的「原始文件」与「证据定位」就是它。 */
+export function getTaskFile(taskId: number): Promise<Blob> {
+  return requestBlob('/tasks/' + taskId + '/file');
 }
 
 export type DashboardData = {
@@ -193,13 +248,21 @@ export type TemplateRow = {
   version: number;
   status: string;
   field_map: Record<string, unknown>;
+  header_columns?: string[] | null;
+  required_fields?: string[] | null;
+  has_layout?: boolean;
+  has_sample?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
   deleted_at?: string | null;
 };
 
-export function listTemplates(includeDeleted = false): Promise<TemplateRow[]> {
-  return request<TemplateRow[]>('/templates' + (includeDeleted ? '?include_deleted=true' : ''));
+export function listTemplates(includeDeleted = false, bankCode?: string): Promise<TemplateRow[]> {
+  const params = new URLSearchParams();
+  if (includeDeleted) params.set('include_deleted', 'true');
+  if (bankCode) params.set('bank_code', bankCode);
+  const qs = params.toString();
+  return request<TemplateRow[]>('/templates' + (qs ? '?' + qs : ''));
 }
 
 export type TemplateDetail = {
@@ -208,8 +271,12 @@ export type TemplateDetail = {
   version: number;
   status: string;
   field_map: Record<string, unknown>;
+  header_columns?: string[] | null;
   layout: unknown | null;
   required_fields?: string[] | null;
+  sample_file_id?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export function getTemplate(id: number): Promise<TemplateDetail> {
@@ -243,7 +310,7 @@ export type TemplateLayout = {
 };
 
 export type TemplatePreview = {
-  template_id: number;
+  template_id: number | null;
   txn_count: number;
   page_count: number;
   pages: { page_no: number; rows: number; header_found: boolean; columns: number }[];
@@ -251,16 +318,81 @@ export type TemplatePreview = {
   rows: {
     txn_date: string | null;
     summary: string | null;
+    counterparty?: string | null;
+    reference_no?: string | null;
     direction: string | null;
     amount: string | null;
     balance: string | null;
     page_no: number;
+    extra?: Record<string, string> | null;
   }[];
+  meta?: {
+    account_no?: string | null;
+    account_name?: string | null;
+    bank_branch?: string | null;
+    account_type?: string | null;
+  };
   required_fields: string[];
   missing_columns: string[];
   empty_columns: string[];
   present_columns: string[];
 };
+
+export function previewDraftTemplate(payload: {
+  file: Blob;
+  fileName?: string;
+  bankCode: string;
+  fieldMap: Record<string, unknown>;
+  layout: unknown;
+  requiredFields?: string[];
+  password?: string;
+}): Promise<TemplatePreview> {
+  const form = new FormData();
+  form.append('file', payload.file, payload.fileName || 'sample.pdf');
+  form.append('bank_code', payload.bankCode);
+  form.append('field_map', JSON.stringify(payload.fieldMap));
+  form.append('layout', JSON.stringify(payload.layout));
+  form.append('required_fields', JSON.stringify(payload.requiredFields ?? []));
+  if (payload.password) form.append('password', payload.password);
+  return request<TemplatePreview>('/templates/preview-draft', { form, timeoutMs: 240000 });
+}
+
+export function saveTemplateFromCanvas(payload: {
+  bankCode: string;
+  fieldMap: Record<string, unknown>;
+  layout: unknown;
+  requiredFields?: string[];
+  templateId?: number | null;
+  publish?: boolean;
+  file?: Blob | null;
+  fileName?: string;
+}): Promise<{ id: number; bank_code: string; version: number; status: string; has_sample: boolean }> {
+  const form = new FormData();
+  form.append('bank_code', payload.bankCode);
+  form.append('field_map', JSON.stringify(payload.fieldMap));
+  form.append('layout', JSON.stringify(payload.layout));
+  form.append('required_fields', JSON.stringify(payload.requiredFields ?? []));
+  form.append('publish', String(Boolean(payload.publish)));
+  if (payload.templateId != null) form.append('template_id', String(payload.templateId));
+  if (payload.file) form.append('file', payload.file, payload.fileName || 'sample.pdf');
+  return request('/templates/save-from-canvas', { form, timeoutMs: 120000 });
+}
+
+export function getTemplateSample(id: number): Promise<Blob> {
+  return requestBlob('/templates/' + id + '/sample');
+}
+
+export function getTemplateLayoutPng(id: number, page = 0): Promise<Blob> {
+  return requestBlob('/templates/' + id + '/layout.png?page=' + page);
+}
+
+export function exportTemplateBlob(id: number): Promise<Blob> {
+  return requestBlob('/templates/' + id + '/export');
+}
+
+export function importTemplate(payload: Record<string, unknown>): Promise<{ id: number; version: number; bank_code: string }> {
+  return request('/templates/import', { body: payload });
+}
 
 export function previewTemplate(id: number, file: Blob, password?: string): Promise<TemplatePreview> {
   const form = new FormData();
@@ -417,6 +549,73 @@ export type AppUser = {
   last_login_at: string | null;
 };
 
+export type MergeMethodInfo = {
+  id: string;
+  label: string;
+  question?: string;
+  approach?: string;
+  impact?: string;
+  when_to_use?: string;
+  tier?: string;
+  short: string;
+  detail: string;
+  formula: string;
+  assumption: string;
+  level: string;
+};
+
+export function getMergeMethods(): Promise<{
+  methods: MergeMethodInfo[];
+  overlap_modes: { id: string; label: string; detail: string }[];
+}> {
+  return request('/entities/methods');
+}
+
+export function getEntitiesMerge(subject: string, method = 'net_internal', overlap = 'max'): Promise<Record<string, unknown>> {
+  const params = new URLSearchParams({ subject, method, overlap });
+  return request('/entities/merge?' + params.toString());
+}
+
+export function mergeTasks(taskIds: number[], mode = 'net_internal'): Promise<Record<string, unknown>> {
+  return request('/tasks/merge', { body: { task_ids: taskIds, mode } });
+}
+
+export function resolveEntityConflict(payload: { account_key: string; subject: string; note?: string }): Promise<{ ok: boolean }> {
+  return request('/entities/conflicts/resolve', { body: payload });
+}
+
+export function undoEntityConflict(accountKey: string): Promise<{ ok: boolean }> {
+  return request('/entities/conflicts/resolve?account_key=' + encodeURIComponent(accountKey), { method: 'DELETE' });
+}
+
 export function listUsers(): Promise<{ items: AppUser[] }> {
   return request<{ items: AppUser[] }>('/auth/users');
+}
+
+export function createUser(payload: {
+  username: string;
+  password: string;
+  display_name?: string;
+  is_admin?: boolean;
+}): Promise<{ user: AppUser }> {
+  return request('/auth/users', { body: { ...payload, role: 'banker' } });
+}
+
+export function updateUser(
+  userId: number,
+  payload: { display_name?: string; is_admin?: boolean; password?: string },
+): Promise<{ user: AppUser }> {
+  return request('/auth/users/' + userId, { method: 'PATCH', body: payload });
+}
+
+export function disableUser(userId: number): Promise<{ id: number; status: string }> {
+  return request('/auth/users/' + userId, { method: 'DELETE' });
+}
+
+export function enableUser(userId: number): Promise<{ id: number; status: string }> {
+  return request('/auth/users/' + userId + '/enable', { method: 'POST' });
+}
+
+export function changePassword(oldPassword: string, newPassword: string): Promise<{ changed: boolean }> {
+  return request('/auth/change-password', { body: { old_password: oldPassword, new_password: newPassword } });
 }

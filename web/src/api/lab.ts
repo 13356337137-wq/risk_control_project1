@@ -70,19 +70,35 @@ export type InspectSingle = {
   y1: number;
 };
 
+export type InspectRegion = {
+  area: { x: number; y: number; w: number; h: number };
+  header_y: number | null;
+  bands: InspectBand[];
+};
+
 export type InspectPage = {
   index: number;
   width: number;
   height: number;
   lines: number;
   header_y: number | null;
+  header_index?: number;
   bands: InspectBand[];
+  regions?: InspectRegion[];
   singles: InspectSingle[];
   has_text: boolean;
 };
-export type InspectReport = { pages: InspectPage[]; page_count: number; text_layer: boolean };
+export type InspectReport = {
+  pages: InspectPage[];
+  page_count: number;
+  text_layer: boolean;
+  ocr_used?: boolean;
+  ocr_pages?: number[];
+};
 export type SpreadBand = {
   page: number;
+  width?: number;
+  height?: number;
   keyword: InspectCell;
   anchor: InspectCell;
   x0: number;
@@ -92,33 +108,56 @@ export type SpreadBand = {
 };
 export type SpreadReport = { keyword: string; page_count: number; bands: SpreadBand[] };
 
-export function inspectSample(sample: string): Promise<InspectReport> {
-  return request<InspectReport>('/lab/inspect?sample=' + encodeURIComponent(sample));
-}
-
-export function spreadKeyword(sample: string, keyword: string): Promise<SpreadReport> {
-  return request<SpreadReport>(
-    '/lab/spread?sample=' + encodeURIComponent(sample) + '&keyword=' + encodeURIComponent(keyword),
+export function inspectSample(sample: string, ocrPage = 0): Promise<InspectReport> {
+  return request<InspectReport>(
+    '/lab/inspect?sample=' + encodeURIComponent(sample) + '&ocr_page=' + ocrPage,
   );
 }
 
-export function inspectFile(file: Blob, password?: string): Promise<InspectReport> {
+export function spreadKeyword(sample: string, keyword: string, pageIndex?: number): Promise<SpreadReport> {
+  return request<SpreadReport>(
+    '/lab/spread?sample=' +
+      encodeURIComponent(sample) +
+      '&keyword=' +
+      encodeURIComponent(keyword) +
+      (pageIndex !== undefined ? '&page_index=' + pageIndex : ''),
+  );
+}
+
+export function inspectFile(file: Blob, password?: string, ocrPage = 0, fileName = 'upload.pdf'): Promise<InspectReport> {
   const form = new FormData();
-  form.append('file', file, 'upload.pdf');
+  form.append('file', file, fileName);
+  form.append('ocr_page', String(ocrPage));
   if (password) form.append('password', password);
   return request<InspectReport>('/lab/inspect-file', { form, timeoutMs: 180000 });
 }
 
-export function spreadFile(file: Blob, keyword: string, password?: string): Promise<SpreadReport> {
+export function spreadFile(
+  file: Blob,
+  keyword: string,
+  password?: string,
+  pageIndex?: number,
+  fileName = 'upload.pdf',
+): Promise<SpreadReport> {
   const form = new FormData();
-  form.append('file', file, 'upload.pdf');
+  form.append('file', file, fileName);
   form.append('keyword', keyword);
   if (password) form.append('password', password);
+  if (pageIndex !== undefined) form.append('page_index', String(pageIndex));
   return request<SpreadReport>('/lab/spread-file', { form, timeoutMs: 180000 });
 }
 
 export function sampleFileUrl(sample: string): string {
   return '/api/v1/lab/sample-file?sample=' + encodeURIComponent(sample);
+}
+
+export async function fetchSampleBytes(sample: string): Promise<ArrayBuffer> {
+  const token = localStorage.getItem('bs_token');
+  const res = await fetch(sampleFileUrl(sample), {
+    headers: token ? { Authorization: 'Bearer ' + token } : {},
+  });
+  if (!res.ok) throw new Error('样本文件加载失败（' + res.status + '）');
+  return res.arrayBuffer();
 }
 
 export type CustomFeature = {

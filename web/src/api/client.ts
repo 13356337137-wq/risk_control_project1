@@ -84,3 +84,25 @@ function safeJson(text: string): unknown {
     return null;
   }
 }
+
+/** 唯一二进制下载出口：复用鉴权头与 401/错误码处理，避免各页面重复手写 fetch。 */
+export async function requestBlob(path: string, timeoutMs = 120000): Promise<Blob> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = 'Bearer ' + token;
+  try {
+    const response = await fetch(BASE + path, { headers, signal: controller.signal });
+    if (response.status === 401) {
+      clearSession();
+      throw new ApiError('E_AUTH', '登录已过期', { httpStatus: 401 });
+    }
+    if (!response.ok) {
+      throw new ApiError('E_UNKNOWN', '请求失败（' + response.status + '）', { httpStatus: response.status });
+    }
+    return await response.blob();
+  } finally {
+    clearTimeout(timeout);
+  }
+}

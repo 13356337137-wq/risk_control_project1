@@ -42,16 +42,39 @@ class Band:
         return self.x1 - self.x0
 
 
+def _expand_header_tokens(tokens: list[Word]) -> list[tuple[str, Word]]:
+    """把表头行拆成 (field, seed_word) 列表，兼容 OCR 粘连成整块的复合表头。"""
+    seeds: list[tuple[str, Word]] = []
+    seen: set[str] = set()
+    for token in tokens:
+        splits = kw.split_header_token(token.text)
+        if splits:
+            width = max(1.0, token.x1 - token.x0)
+            for field, r0, r1 in splits:
+                if field in seen:
+                    continue
+                sub_word = Word(
+                    text=field,
+                    x0=token.x0 + width * r0,
+                    x1=token.x0 + width * r1,
+                    top=token.top,
+                    bottom=token.bottom,
+                    size=token.size,
+                )
+                seeds.append((field, sub_word))
+                seen.add(field)
+            continue
+        hit = kw.match_header_field(token.text)
+        if hit and hit not in seen:
+            seeds.append((hit, token))
+            seen.add(hit)
+    return seeds
+
+
 def _find_header(tokens_per_line: list[list[Word]]) -> tuple[int, list[tuple[str, Word]]] | None:
     best: tuple[int, int, list[tuple[str, Word]]] | None = None
     for index, tokens in enumerate(tokens_per_line[:HEADER_SCAN_LINES]):
-        seeds: list[tuple[str, Word]] = []
-        seen: set[str] = set()
-        for token in tokens:
-            hit = kw.match_header_field(token.text)
-            if hit and hit not in seen:
-                seeds.append((hit, token))
-                seen.add(hit)
+        seeds = _expand_header_tokens(tokens)
         if len(seeds) < 2:
             continue
         score = len(seeds)
@@ -67,26 +90,50 @@ def _tolerance(field_name: str, page_width: float) -> float:
     return page_width * (0.035 if field_name in kw.MONEY_FIELDS else 0.015)
 
 
+def data_start_after_header(tokens_per_line: list[list[Word]], header_index: int) -> int:
+    """跳过英文副表头或换行表头行，从真正的首行交易数据开始收集。"""
+    start = header_index + 1
+    limit = min(len(tokens_per_line), header_index + 5)
+    while start < limit:
+        texts = [token.text for token in tokens_per_line[start]]
+        if kw.is_header_continuation(texts):
+            start += 1
+        else:
+            break
+    return start
+
+
 def _spread(
     tokens_per_line: list[list[Word]],
     header_index: int,
     seeds: list[tuple[str, Word]],
     page_width: float,
 ) -> list[Band]:
+    ordered_seeds = sorted(seeds, key=lambda item: item[1].cx)
+    seed_cxs = [item[1].cx for item in ordered_seeds]
+    start_row = data_start_after_header(tokens_per_line, header_index)
     bands: list[Band] = []
-    for field_name, seed in seeds:
+    for idx, (field_name, seed) in enumerate(ordered_seeds):
         left, right = seed.x0, seed.x1
         center = seed.cx
+        prev_cx = seed_cxs[idx - 1] if idx > 0 else None
+        next_cx = seed_cxs[idx + 1] if idx + 1 < len(seed_cxs) else None
         hits: list[Word] = []
         misses = 0
-        for tokens in tokens_per_line[header_index + 1:]:
+        for tokens in tokens_per_line[start_row:]:
             tolerance = _tolerance(field_name, page_width)
             half = max((right - left) / 2, page_width * 0.008) + tolerance
             candidate: Word | None = None
             best_distance = None
             for token in tokens:
                 distance = abs(token.cx - center)
-                if distance <= half and (best_distance is None or distance < best_distance):
+                if distance > half:
+                    continue
+                if prev_cx is not None and token.cx < seed.cx and (seed.cx - token.cx) > (token.cx - prev_cx) + page_width * 0.01:
+                    continue
+                if next_cx is not None and token.cx > seed.cx and (token.cx - seed.cx) > (next_cx - token.cx) + page_width * 0.01:
+                    continue
+                if best_distance is None or distance < best_distance:
                     candidate, best_distance = token, distance
             if candidate is not None and kw.shape_ok(field_name, candidate.text):
                 hits.append(candidate)
@@ -248,36 +295,14 @@ def _confidence(bands: list[Band], source: str, rows: int) -> float:
     return round(max(0.05, min(0.98, score)), 3)
 
 
-def detect_page(page: PageWords) -> TableRegion | None:
-    if not page.has_text:
-        return None
-    # 行容差按字高自适应：OCR 词比文本层高一个量级，固定 3pt 会把同一表头拆成三行，
-    # 于是只认出 3 个字段、整页列数少一半（实测 +3° 图片件就这么丢的日期列）
-    heights = sorted(word.bottom - word.top for word in page.words)
-    tolerance = max(2.0, heights[len(heights) // 2] * 0.6)
-    lines: list[Line] = group_lines(page.words, y_tol=tolerance)
-    tokens_per_line = [merge_tokens(line) for line in lines]
-
-    header = _find_header(tokens_per_line)
-    bands: list[Band] = []
-    source = "none"
-    header_line: Line | None = None
-    if header is not None:
-        header_index, seeds = header
-        bands = _spread(tokens_per_line, header_index, seeds, page.width)
-        if len(bands) >= 2:
-            source = "anchor_spread"
-            header_line = lines[header_index]
-    if len(bands) < 2:
-        bands = _geometry(tokens_per_line, page.width)
-        source = "geometry" if len(bands) >= 2 else "none"
-    if len(bands) < 2 and header is not None and len(header[1]) >= 2:
-        bands = _header_only_bands(header[1])
-        source = "header_only"
-        header_line = lines[header[0]]
+def _build_region(
+    page: PageWords,
+    bands: list[Band],
+    source: str,
+    header_line: Line | None,
+) -> TableRegion | None:
     if not bands:
         return None
-
     rows = max((len(b.hits) for b in bands), default=0)
     x0 = min(b.x0 for b in bands)
     x1 = max(b.x1 for b in bands)
@@ -316,8 +341,61 @@ def detect_page(page: PageWords) -> TableRegion | None:
     )
 
 
+def detect_page_regions(page: PageWords) -> list[TableRegion]:
+    """检测一页内的全部表格区域（支持同页上下多张表格）。"""
+    if not page.has_text:
+        return []
+    heights = sorted(word.bottom - word.top for word in page.words)
+    tolerance = max(2.0, heights[len(heights) // 2] * 0.6)
+    lines: list[Line] = group_lines(page.words, y_tol=tolerance)
+    tokens_per_line = [merge_tokens(line) for line in lines]
+
+    header = _find_header(tokens_per_line)
+    bands: list[Band] = []
+    source = "none"
+    header_line: Line | None = None
+    header_index = -1
+    if header is not None:
+        header_index, seeds = header
+        bands = _spread(tokens_per_line, header_index, seeds, page.width)
+        if len(bands) >= 2:
+            source = "anchor_spread"
+            header_line = lines[header_index]
+    if len(bands) < 2:
+        bands = _geometry(tokens_per_line, page.width)
+        source = "geometry" if len(bands) >= 2 else "none"
+    if len(bands) < 2 and header is not None and len(header[1]) >= 2:
+        bands = _header_only_bands(header[1])
+        source = "header_only"
+        header_line = lines[header[0]]
+    primary = _build_region(page, bands, source, header_line)
+    if primary is None:
+        return []
+
+    regions = [primary]
+    primary_bottom = (primary.area[1] + primary.area[3]) * page.height
+    tail_start = next((i for i, line in enumerate(lines) if line.top > primary_bottom + page.height * 0.02), None)
+    if tail_start is not None and tail_start < len(tokens_per_line) - 3:
+        tail_header = _find_header(tokens_per_line[tail_start:])
+        if tail_header is not None:
+            rel_idx, tail_seeds = tail_header
+            abs_idx = tail_start + rel_idx
+            if abs_idx > header_index:
+                tail_bands = _spread(tokens_per_line, abs_idx, tail_seeds, page.width)
+                if sum(1 for b in tail_bands if len(b.hits) >= MIN_HITS) >= 2:
+                    second = _build_region(page, tail_bands, "anchor_spread", lines[abs_idx])
+                    if second is not None:
+                        regions.append(second)
+    return regions
+
+
+def detect_page(page: PageWords) -> TableRegion | None:
+    regions = detect_page_regions(page)
+    return regions[0] if regions else None
+
+
 def detect_layout(pages: list[PageWords]) -> LayoutPlan:
-    regions = [r for r in (detect_page(p) for p in pages) if r is not None]
+    regions = [r for p in pages for r in detect_page_regions(p)]
     text_pages = [p for p in pages if p.has_text]
     size = (pages[0].width, pages[0].height) if pages else None
     if not regions:

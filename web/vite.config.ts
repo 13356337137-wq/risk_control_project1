@@ -10,10 +10,9 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5175,
     strictPort: true,
-    // 特征 Lab 是新平台的独立服务（8020），其余接口仍在旧后端（8010）。
-    // 更具体的路径必须排在前面，否则会被 '/api' 先吃掉。
+    // 特征 Lab 已并入统一后端（8010）；如显式指定 LAB_TARGET，则仍可分流到独立 8020 调试
     proxy: {
-      '/api/v1/lab': process.env.LAB_TARGET || 'http://127.0.0.1:8020',
+      ...(process.env.LAB_TARGET ? { '/api/v1/lab': process.env.LAB_TARGET } : {}),
       '/api': process.env.API_TARGET || 'http://127.0.0.1:8010',
     },
   },

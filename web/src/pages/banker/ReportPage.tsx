@@ -1,24 +1,30 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { getReport, getTransactions, type ReportPayload, type TxnRow } from '../../api/banker';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import {
+  getReport,
+  getTaskExportBlob,
+  getTaskFile,
+  getTransactions,
+  verifyTask,
+  whitelistTask,
+  type ReportPayload,
+  type TxnRow,
+} from '../../api/banker';
 import { getErrorMessage } from '../../api/errors';
+import { getUser } from '../../auth/store';
+import { PdfPageCanvas, type PageRenderSize } from '../../components/PdfPageCanvas';
+import { AmountHistogram, Bar, DomainRadar, MonthlyFlow } from '../../components/ReportCharts';
+import { Button } from '../../ui/Button';
 import { Notice } from '../../ui/Notice';
-import { AmountHistogram, Bar, MonthlyFlow } from '../../components/ReportCharts';
 
-/**
- * 报告页：结论在最上，其余按「证据能撑住几层」的顺序排。
- *
- * 与初版对齐的部分：四层核验逐项、40 项指标按业务域分块、证据与材料、
- * 以及可以翻到每一笔的流水明细——只给一张结论卡片的报告，客户经理没法拿去答复审核。
- */
 type Tab = 'summary' | 'verify' | 'metrics' | 'evidence' | 'txns';
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: 'summary', label: '结论' },
-  { key: 'verify', label: '四层核验' },
-  { key: 'metrics', label: '指标' },
-  { key: 'evidence', label: '证据与材料' },
-  { key: 'txns', label: '交易流水' },
+  { key: 'summary', label: '结论与评分' },
+  { key: 'verify', label: '四层核验与自检' },
+  { key: 'metrics', label: '40 项指标' },
+  { key: 'evidence', label: '证据与原件定位' },
+  { key: 'txns', label: '交易流水明细' },
 ];
 
 const DOMAIN: Record<string, string> = {
@@ -29,30 +35,112 @@ const DOMAIN: Record<string, string> = {
   E: '语义与场景',
 };
 
+type LayerCheck = {
+  code?: string;
+  name?: string;
+  method?: string;
+  status?: string;
+  detail?: string;
+};
+
+type LayerWithChecks = {
+  layer: string;
+  status: string;
+  detail: string;
+  checks?: LayerCheck[];
+};
+
+type SelfCheckData = {
+  status?: string;
+  summary?: string;
+  items?: { code: string; name: string; status: string; detail?: string; ratio?: number | null }[];
+};
+
+type VerificationData = {
+  status?: string;
+  changed?: boolean;
+  verified_at?: string;
+  summary?: string;
+  notes?: string[];
+};
+
+type CustomStatItem = {
+  field: string;
+  label?: string;
+  count?: number;
+  numeric?: number;
+  valued_count?: number;
+  total_count?: number;
+  sum?: string | null;
+  avg?: string | null;
+  samples?: string[];
+};
+
+function layerName(layer: string) {
+  return { file: '载体层', content: '内容层', ledger: '账务层', external: '外部层' }[layer] ?? layer;
+}
+
+function checkStatusBadge(status?: string) {
+  switch (status) {
+    case 'pass':
+      return { cls: 'pill ok', label: '通过' };
+    case 'fail':
+    case 'inconsistent':
+      return { cls: 'pill err', label: '不通过' };
+    case 'warn':
+    case 'limited':
+      return { cls: 'pill warn', label: '受限/告警' };
+    default:
+      return { cls: 'pill', label: status || '跳过' };
+  }
+}
+
 export default function ReportPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const taskId = Number(id);
+  const isAdmin = Boolean(getUser()?.is_admin);
+
   const [report, setReport] = useState<ReportPayload | null>(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [tab, setTab] = useState<Tab>('summary');
   const [txns, setTxns] = useState<TxnRow[] | null>(null);
   const [txnPage, setTxnPage] = useState(0);
   const [keyword, setKeyword] = useState('');
-  // 证据里的 txn_id 是「第几笔」（1 起），不是数据库 id —— 后端生成证据时用的是 range(1, n+1)
   const [highlightRow, setHighlightRow] = useState<number | null>(null);
   const highlightRef = useRef<HTMLTableRowElement | null>(null);
   const [openMetric, setOpenMetric] = useState<string | null>(null);
+
+  // 证据原件预览抽屉
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [fileBytes, setFileBytes] = useState<ArrayBuffer | null>(null);
+  const [fileMime, setFileMime] = useState('application/pdf');
+  const [fileLoading, setFileLoading] = useState(false);
+  const [docPageIdx, setDocPageIdx] = useState(0);
+  const [docPageCount, setDocPageCount] = useState(1);
+  const [docBaseSize, setDocBaseSize] = useState<PageRenderSize | null>(null);
+  const [marker, setMarker] = useState<{ page: number; x?: number; y?: number; label?: string } | null>(null);
+
+  // 加白 & 复核状态
+  const [whitelistOpen, setWhitelistOpen] = useState(false);
+  const [whitelistReason, setWhitelistReason] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
+
   const PAGE = 100;
 
-  useEffect(() => {
-    let alive = true;
+  const loadReport = useCallback(() => {
     getReport(taskId)
-      .then((data) => alive && setReport(data))
-      .catch((err) => alive && setError(getErrorMessage(err, 'banker')));
-    return () => {
-      alive = false;
-    };
+      .then((data) => {
+        setReport(data);
+        setError('');
+      })
+      .catch((err) => setError(getErrorMessage(err, 'banker')));
   }, [taskId]);
+
+  useEffect(() => {
+    loadReport();
+  }, [loadReport]);
 
   useEffect(() => {
     if (tab !== 'txns' || txns) return;
@@ -65,6 +153,69 @@ export default function ReportPage() {
     };
   }, [tab, taskId, txns]);
 
+  const openOriginalAt = async (pageNo = 1, x?: number, y?: number, label?: string) => {
+    setDrawerOpen(true);
+    setDocPageIdx(Math.max(0, pageNo - 1));
+    setMarker({ page: Math.max(0, pageNo - 1), x, y, label });
+    if (fileBytes) return;
+    setFileLoading(true);
+    try {
+      const blob = await getTaskFile(taskId);
+      setFileMime(blob.type || 'application/pdf');
+      setFileBytes(await blob.arrayBuffer());
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setFileLoading(false);
+    }
+  };
+
+  const handleExport = async (fmt: 'json' | 'csv') => {
+    try {
+      const blob = await getTaskExportBlob(taskId, fmt);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `task-${taskId}.${fmt === 'json' ? 'json' : 'csv'}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    }
+  };
+
+  const handleManualVerify = async () => {
+    setActionBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await verifyTask(taskId);
+      setNotice('已完成慢通道复核并更新报告。');
+      loadReport();
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleWhitelist = async () => {
+    if (!whitelistReason.trim()) return;
+    setActionBusy(true);
+    setError('');
+    try {
+      await whitelistTask(taskId, whitelistReason.trim());
+      setWhitelistOpen(false);
+      setWhitelistReason('');
+      setNotice('已将该任务录入人工核实白名单并留存审计。');
+      loadReport();
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const metrics = report?.metrics ?? [];
   const grouped = useMemo(() => {
     const out: Record<string, typeof metrics> = {};
@@ -75,7 +226,6 @@ export default function ReportPage() {
     return out;
   }, [metrics]);
 
-  // 证据跳过来时把那一行滚到视野中间，否则「看这笔」看起来像没反应
   useEffect(() => {
     if (tab === 'txns' && highlightRef.current) {
       highlightRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -95,7 +245,7 @@ export default function ReportPage() {
 
   if (error && !report) {
     return (
-      <div className="panel">
+      <div className="panel wide">
         <Notice>{error}</Notice>
         <Link className="btn btn-ghost" to="/bank/tasks">回到列表</Link>
       </div>
@@ -105,27 +255,98 @@ export default function ReportPage() {
 
   const score = report.scores?.overall;
   const valued = metrics.filter((metric) => metric.value !== null).length;
+  const verification = (report.verification || {}) as VerificationData;
+  const selfCheck = report.self_check as SelfCheckData | SelfCheckData['items'] | null | undefined;
+  const selfCheckItems = Array.isArray(selfCheck) ? selfCheck : (selfCheck?.items ?? []);
+  const customStats = Array.isArray(report.custom_field_stats)
+    ? (report.custom_field_stats as CustomStatItem[])
+    : [];
+  const layers = (report.layers ?? []) as LayerWithChecks[];
+  const hasTemplateMismatch = (report.limitations ?? []).some((l) =>
+    /模板缺列|解析不完整|模板|临时标注/.test(l),
+  );
 
   return (
     <div className="panel wide">
       <header className="panel-head">
         <div>
-          <h1>{report.verdict}</h1>
+          <div className="report-title-row">
+            <h1>{report.verdict}</h1>
+            <span className={'pill ' + (verification.status === 'verified' ? 'ok' : verification.status === 'pending' ? 'warn' : '')}>
+              复核：{verification.status === 'verified' ? '已完成' : verification.status === 'pending' ? '待复核' : (verification.status || '—')}
+            </span>
+          </div>
           <p className="sub">{report.verdict_reason}</p>
         </div>
-        <div className="filters">
+        <div className="filters no-print">
+          <Button size="sm" onClick={() => navigate('/bank/annotate?taskId=' + taskId)}>
+            画布调框重解析
+          </Button>
+          <Button size="sm" variant="ghost" disabled={actionBusy} onClick={() => void handleManualVerify()}>
+            手动复核
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setWhitelistOpen((v) => !v)}>
+            误判加白
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => void handleExport('json')}>
+            导出结论 JSON
+          </Button>
+          {isAdmin && (
+            <Button size="sm" variant="ghost" onClick={() => void handleExport('csv')}>
+              导出明细 CSV
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={() => window.print()}>
+            打印摘要
+          </Button>
           <Link className="btn btn-ghost" to="/bank/tasks">回到列表</Link>
         </div>
       </header>
+
+      {error && <Notice>{error}</Notice>}
+      {notice && <Notice tone="ok">{notice}</Notice>}
+
+      {hasTemplateMismatch && (
+        <div className="alert warn no-print">
+          检测到该任务存在「解析不完整 / 模板缺列 / 版式未命中」提示，建议点击右侧按钮在画布中直接修正框选并重解析：
+          <button
+            type="button"
+            className="link-btn"
+            style={{ marginLeft: 10 }}
+            onClick={() => navigate('/bank/annotate?taskId=' + taskId)}
+          >
+            打开标注工作台 ›
+          </button>
+        </div>
+      )}
+
+      {whitelistOpen && (
+        <div className="import-box no-print">
+          <strong>人工复核加白说明（写入不可删审计日志）</strong>
+          <div className="try-row" style={{ marginTop: 8 }}>
+            <input
+              type="text"
+              style={{ flex: 1 }}
+              placeholder="填写核实依据，如：已电话回访开户行并核验柜面回单一致"
+              value={whitelistReason}
+              onChange={(e) => setWhitelistReason(e.target.value)}
+            />
+            <Button size="sm" disabled={actionBusy || !whitelistReason.trim()} onClick={() => void handleWhitelist()}>
+              确认加白
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setWhitelistOpen(false)}>取消</Button>
+          </div>
+        </div>
+      )}
 
       <div className="score-row">
         <div className="score"><span className="score-value">{score ?? report.trust?.score ?? '—'}</span><span className="muted small">真实性得分</span></div>
         <div className="score"><span className="score-value">{report.scores?.grade_label ?? report.trust?.label ?? '—'}</span><span className="muted small">分级</span></div>
         <div className="score"><span className="score-value">{valued}/{metrics.length}</span><span className="muted small">指标有值</span></div>
-        <div className="score"><span className="score-value">{report.materials?.length ?? 0}</span><span className="muted small">材料</span></div>
+        <div className="score"><span className="score-value">{report.materials?.length ?? 0}</span><span className="muted small">提交材料</span></div>
       </div>
 
-      <div className="tabs small-tabs report-tabs">
+      <div className="tabs small-tabs report-tabs no-print">
         {TABS.map((item) => (
           <button key={item.key} className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)}>
             {item.label}
@@ -136,10 +357,10 @@ export default function ReportPage() {
       {tab === 'summary' ? (
         <>
           <section>
-            <h2>仪表</h2>
+            <h2>四层得分仪表</h2>
             <div className="gauge-row">
               <div className="gauge-card">
-                <h3>总分</h3>
+                <h3>综合评分</h3>
                 <span className="score-value">{report.scores?.overall ?? report.trust?.score ?? '—'}</span>
                 <span className="muted small">等级 {report.scores?.grade_label ?? report.trust?.label ?? '—'}</span>
                 {report.scores?.method ? <span className="muted small">{report.scores.method}</span> : null}
@@ -150,7 +371,10 @@ export default function ReportPage() {
                     {layer.label} <span className="muted small">{layer.status}</span>
                   </h3>
                   <span className="score-value small-value">{layer.score}</span>
-                  <Bar value={layer.score} tone={layer.status === 'unavailable' ? 'muted' : layer.score >= 80 ? 'brand' : layer.score >= 60 ? 'warn' : 'bad'} />
+                  <Bar
+                    value={layer.score}
+                    tone={layer.status === 'unavailable' ? 'muted' : layer.score >= 80 ? 'brand' : layer.score >= 60 ? 'warn' : 'bad'}
+                  />
                   <span className="muted small">权重 {Math.round((layer.weight ?? 0) * 100)}%</span>
                 </div>
               ))}
@@ -159,75 +383,88 @@ export default function ReportPage() {
 
           {report.scores?.domains?.length ? (
             <section>
-              <h2>分区得分</h2>
-              <table className="grid compact">
-                <thead><tr><th>业务域</th><th>得分</th><th>权重</th><th>指标覆盖</th><th>说明</th></tr></thead>
-                <tbody>
-                  {report.scores.domains.map((domain) => (
-                    <tr key={domain.key} className="domain-row">
-                      <td>
-                        {domain.name}
-                        <div className="muted small">{domain.desc}</div>
-                      </td>
-                      <td>
-                        <span className="bar-inline">
-                          <Bar value={domain.score} tone={domain.score >= 80 ? 'brand' : domain.score >= 60 ? 'warn' : 'bad'} />
-                          <span>{domain.score}</span>
-                        </span>
-                      </td>
-                      <td className="small muted">{Math.round(domain.weight * 100)}%</td>
-                      <td className="small muted">{domain.metric_valued}/{domain.metric_total}{domain.missing ? ' · 缺 ' + domain.missing : ''}</td>
-                      <td className="small muted">
-                        {domain.hits?.length ? '命中 ' + domain.hits.join('、') : domain.detail || '无扣分'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <h2>业务域评估与五维雷达图</h2>
+              <div className="domain-split">
+                <div className="domain-radar-wrap">
+                  <DomainRadar domains={report.scores.domains} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <table className="grid compact">
+                    <thead><tr><th>业务域</th><th>得分</th><th>权重</th><th>指标覆盖</th><th>命中线索</th></tr></thead>
+                    <tbody>
+                      {report.scores.domains.map((domain) => (
+                        <tr key={domain.key} className="domain-row">
+                          <td>
+                            {domain.name}
+                            <div className="muted small">{domain.desc}</div>
+                          </td>
+                          <td>
+                            <span className="bar-inline">
+                              <Bar value={domain.score} tone={domain.score >= 80 ? 'brand' : domain.score >= 60 ? 'warn' : 'bad'} />
+                              <span>{domain.score}</span>
+                            </span>
+                          </td>
+                          <td className="small muted">{Math.round(domain.weight * 100)}%</td>
+                          <td className="small muted">{domain.metric_valued}/{domain.metric_total}{domain.missing ? ' · 缺 ' + domain.missing : ''}</td>
+                          <td className="small muted">
+                            {domain.hits?.length ? '命中 ' + domain.hits.join('、') : domain.detail || '无扣分'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </section>
           ) : null}
 
           {report.trend?.length ? (
             <section>
-              <h2>月度收支</h2>
+              <h2>月度收支趋势</h2>
               <MonthlyFlow series={report.trend} />
-              <p className="muted small">柱是当月收入与支出，虚线是净额。连续几个月入不敷出通常比单月大额更值得问。</p>
+              <p className="muted small">柱状为当月总流入/总流出，虚线为当月净流入；持续入不敷出需重点核查资金用途。</p>
             </section>
           ) : null}
 
+          {customStats.length > 0 && (
+            <section>
+              <h2>模板自定义扩展字段汇总</h2>
+              <table className="grid compact">
+                <thead><tr><th>字段</th><th>有值笔数</th><th>数值合计</th><th>均值</th><th>样例</th></tr></thead>
+                <tbody>
+                  {customStats.map((item) => (
+                    <tr key={item.field}>
+                      <td>{item.label || item.field} <span className="small muted">({item.field})</span></td>
+                      <td>{item.count ?? item.valued_count ?? 0}{item.total_count ? `/${item.total_count}` : ''}</td>
+                      <td className="mono">{item.sum ?? '—'}</td>
+                      <td className="mono">{item.avg ?? '—'}</td>
+                      <td className="small muted">{(item.samples || []).slice(0, 3).join(' / ') || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+
           {report.conclusions?.length ? (
             <section>
-              <h2>结论依据</h2>
+              <h2>风险与审查结论依据</h2>
               <ul className="plain">
                 {report.conclusions.map((item, index) => (
                   <li key={index}>
-                    <strong>{item.code}</strong> {item.message}
+                    <span className={'pill ' + (item.level === 'high' ? 'err' : item.level === 'medium' ? 'warn' : '')}>
+                      {item.code}
+                    </span>{' '}
+                    {item.message}
                   </li>
                 ))}
               </ul>
             </section>
           ) : null}
 
-          <section>
-            <h2>四层概览</h2>
-            <table className="grid compact">
-              <thead><tr><th>层</th><th>状态</th><th>说明</th></tr></thead>
-              <tbody>
-                {(report.layers ?? []).map((layer) => (
-                  <tr key={layer.layer}>
-                    <td>{layerName(layer.layer)}</td>
-                    <td>{layer.status}</td>
-                    <td className="small muted">{layer.detail}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="muted small">逐项看「怎么验、本次结果」，切到「四层核验」。</p>
-          </section>
-
           {report.limitations?.length ? (
             <section>
-              <h2>核验受限（{report.limitations.length}）</h2>
+              <h2>核验受限说明（{report.limitations.length}）</h2>
               <ul className="plain">
                 {report.limitations.map((item, index) => <li key={index}>{item}</li>)}
               </ul>
@@ -238,21 +475,71 @@ export default function ReportPage() {
 
       {tab === 'verify' ? (
         <section>
-          <h2>四层逐项</h2>
-          {(report.layers ?? []).map((layer) => (
+          <h2>四层真实性核验明细</h2>
+          {layers.map((layer) => (
             <div key={layer.layer} className="verify-block">
               <h3>
-                {layerName(layer.layer)} <span className="muted small">{layer.status}</span>
+                {layerName(layer.layer)} <span className="pill">{layer.status}</span>
               </h3>
               <p className="small muted">{layer.detail}</p>
+              {layer.checks && layer.checks.length > 0 && (
+                <table className="grid compact" style={{ marginTop: 8 }}>
+                  <thead><tr><th>编号</th><th>核验项</th><th>状态</th><th>结果说明</th></tr></thead>
+                  <tbody>
+                    {layer.checks.map((ck, idx) => {
+                      const b = checkStatusBadge(ck.status);
+                      return (
+                        <tr key={ck.code || idx}>
+                          <td className="mono small">{ck.code || '—'}</td>
+                          <td>{ck.name || ck.method || '—'}</td>
+                          <td><span className={b.cls}>{b.label}</span></td>
+                          <td className="small muted">{ck.detail || '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
             </div>
           ))}
-          {report.self_check ? (
-            <>
-              <h3>自检</h3>
-              <pre className="json-box">{JSON.stringify(report.self_check, null, 2)}</pre>
-            </>
-          ) : null}
+
+          {selfCheckItems.length > 0 && (
+            <div style={{ marginTop: 18 }}>
+              <h2>解析自检结果（S1–S7）</h2>
+              <table className="grid compact">
+                <thead><tr><th>代码</th><th>自检项</th><th>状态</th><th>详情</th></tr></thead>
+                <tbody>
+                  {selfCheckItems.map((sc, idx) => {
+                    const b = checkStatusBadge(sc.status);
+                    return (
+                      <tr key={sc.code || idx}>
+                        <td className="mono small">{sc.code}</td>
+                        <td>{sc.name}</td>
+                        <td><span className={b.cls}>{b.label}</span></td>
+                        <td className="small muted">{sc.detail || '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {verification && Object.keys(verification).length > 0 && (
+            <div className="verify-block" style={{ marginTop: 18 }}>
+              <h3>慢通道复核状态</h3>
+              <p className="small muted">
+                状态：{verification.status || '—'}
+                {verification.verified_at ? ` · 时间：${verification.verified_at}` : ''}
+                {verification.summary ? ` · ${verification.summary}` : ''}
+              </p>
+              {verification.notes?.length ? (
+                <ul className="plain small">
+                  {verification.notes.map((n, i) => <li key={i}>{n}</li>)}
+                </ul>
+              ) : null}
+            </div>
+          )}
         </section>
       ) : null}
 
@@ -271,9 +558,9 @@ export default function ReportPage() {
                     return (
                       <Fragment key={metric.code}>
                         <tr className="metric-row" onClick={() => setOpenMetric(open ? null : metric.code)}>
-                          <td>{metric.code}</td>
+                          <td className="mono small">{metric.code}</td>
                           <td>{metric.name}</td>
-                          <td className={metric.value === null ? 'muted' : ''}>{metric.value ?? '不可算'}</td>
+                          <td className={'mono ' + (metric.value === null ? 'muted' : '')}>{metric.value ?? '不可算'}</td>
                           <td className="small muted">{metric.unit}</td>
                           <td className="small muted">{open ? '收起' : '怎么看'}</td>
                         </tr>
@@ -282,14 +569,14 @@ export default function ReportPage() {
                             <td colSpan={5}>
                               <div className="metric-detail-box">
                                 <dl>
-                                  <dt>口径</dt>
+                                  <dt>口径说明</dt>
                                   <dd>{metric.note || '—'}</dd>
-                                  <dt>本次值</dt>
-                                  <dd>{metric.value === null ? '不可算（缺输入或本期无数据）' : metric.value + ' ' + metric.unit}</dd>
+                                  <dt>本次测算</dt>
+                                  <dd>{metric.value === null ? '不可算（缺必需列或本期无此类交易）' : metric.value + ' ' + metric.unit}</dd>
                                   <dt>口径版本</dt>
-                                  <dd>{metric.caliber_version ?? '—'}（历史报告按当时版本解释）</dd>
+                                  <dd>{metric.caliber_version ?? '—'}</dd>
                                 </dl>
-                                <Link className="link-btn" to="/bank/glossary">看这一项的标准口径说明</Link>
+                                <Link className="link-btn" to="/bank/glossary">查看标准口径词典</Link>
                               </div>
                             </td>
                           </tr>
@@ -307,61 +594,141 @@ export default function ReportPage() {
       {tab === 'evidence' ? (
         <>
           <section>
-            <h2>证据（{report.evidence?.length ?? 0}）</h2>
+            <div className="panel-head">
+              <h2>命中证据与原件定位（{report.evidence?.length ?? 0}）</h2>
+              <Button size="sm" variant="ghost" onClick={() => void openOriginalAt(1)}>
+                打开原件浏览第 1 页
+              </Button>
+            </div>
             {report.evidence?.length ? (
-              <>
-                <p className="muted small">
-                  每条证据 = 一次命中的位置：哪条规则、第几页、哪一笔、在页面上的坐标。点「看这笔」跳到交易流水。
-                </p>
-                <table className="grid compact">
-                  <thead><tr><th>规则</th><th>页</th><th>笔号</th><th>位置</th><th /></tr></thead>
-                  <tbody>
-                    {report.evidence.map((raw, index) => {
-                      const item = (raw ?? {}) as { rule_code?: string; page_no?: number; txn_id?: number; x?: number; y?: number };
-                      return (
-                        <tr key={index}>
-                          <td>{item.rule_code ?? '—'}</td>
-                          <td className="small muted">{item.page_no ?? '—'}</td>
-                          <td className="small muted">{item.txn_id ?? '—'}</td>
-                          <td className="small muted">
-                            {item.x === undefined ? '—' : Math.round(item.x) + ', ' + Math.round(item.y ?? 0) + ' pt'}
-                          </td>
-                          <td>
-                            {item.txn_id ? (
-                              <button
-                                className="link-btn"
-                                onClick={() => {
-                                  const rowNo = item.txn_id ?? null;
-                                  setHighlightRow(rowNo);
-                                  setKeyword('');
-                                  if (rowNo) setTxnPage(Math.floor((rowNo - 1) / PAGE));
-                                  setTab('txns');
-                                }}
-                              >
-                                看这笔
-                              </button>
-                            ) : null}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </>
+              <table className="grid compact">
+                <thead><tr><th>规则</th><th>页码</th><th>笔号</th><th>页面坐标</th><th>追踪定位</th></tr></thead>
+                <tbody>
+                  {report.evidence.map((raw, index) => {
+                    const item = (raw ?? {}) as { rule_code?: string; page_no?: number; txn_id?: number; x?: number; y?: number };
+                    return (
+                      <tr key={index}>
+                        <td className="mono small">{item.rule_code ?? '—'}</td>
+                        <td className="small muted">{item.page_no ?? '—'}</td>
+                        <td className="small muted">{item.txn_id ?? '—'}</td>
+                        <td className="small muted mono">
+                          {item.x === undefined ? '—' : Math.round(item.x) + ', ' + Math.round(item.y ?? 0) + ' pt'}
+                        </td>
+                        <td className="actions-cell">
+                          <button
+                            type="button"
+                            className="link-btn"
+                            onClick={() =>
+                              void openOriginalAt(item.page_no ?? 1, item.x, item.y, item.rule_code)
+                            }
+                          >
+                            定位原件
+                          </button>
+                          {item.txn_id ? (
+                            <button
+                              type="button"
+                              className="link-btn"
+                              onClick={() => {
+                                const rowNo = item.txn_id ?? null;
+                                setHighlightRow(rowNo);
+                                setKeyword('');
+                                if (rowNo) setTxnPage(Math.floor((rowNo - 1) / PAGE));
+                                setTab('txns');
+                              }}
+                            >
+                              看明细行
+                            </button>
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             ) : (
-              <p className="muted small">这份报告没有独立证据条目（证据都并进了四层核验的说明里）。</p>
+              <p className="muted small">这份报告没有独立的坐标级异常证据；可点右上角直接调阅原件 PDF。</p>
             )}
           </section>
+
+          {drawerOpen && (
+            <section className="evidence-viewer">
+              <div className="ann-preview-head">
+                <div>
+                  <strong>原件调阅与坐标定位</strong>
+                  <span className="small muted" style={{ marginLeft: 10 }}>
+                    第 {docPageIdx + 1} / {docPageCount} 页
+                    {marker?.label ? ` · 高亮规则：${marker.label}` : ''}
+                  </span>
+                </div>
+                <div className="filters">
+                  <button
+                    type="button"
+                    className="ann-btn"
+                    disabled={docPageIdx <= 0}
+                    onClick={() => setDocPageIdx((p) => Math.max(0, p - 1))}
+                  >
+                    ‹ 上一页
+                  </button>
+                  <button
+                    type="button"
+                    className="ann-btn"
+                    disabled={docPageIdx >= docPageCount - 1}
+                    onClick={() => setDocPageIdx((p) => Math.min(docPageCount - 1, p + 1))}
+                  >
+                    下一页 ›
+                  </button>
+                  <Button size="sm" variant="ghost" onClick={() => setDrawerOpen(false)}>关闭原件</Button>
+                </div>
+              </div>
+              {fileLoading ? (
+                <p className="muted">原件加载中…</p>
+              ) : fileBytes ? (
+                <div className="ann-stage-wrap" style={{ minHeight: 460 }}>
+                  <PdfPageCanvas
+                    fileBytes={fileBytes}
+                    mimeHint={fileMime}
+                    pageIndex={docPageIdx}
+                    zoom={1.0}
+                    onPageInfo={(info) => {
+                      setDocPageCount(info.pageCount || 1);
+                      setDocBaseSize(info);
+                    }}
+                    overlay={
+                      marker &&
+                      marker.page === docPageIdx &&
+                      marker.x !== undefined &&
+                      marker.y !== undefined &&
+                      docBaseSize &&
+                      docBaseSize.baseWidth > 0 ? (
+                        <div className="ann-overlay" style={{ pointerEvents: 'none' }}>
+                          <div
+                            className="evidence-pin"
+                            style={{
+                              left: `${Math.max(0, Math.min(98, (marker.x / docBaseSize.baseWidth) * 100))}%`,
+                              top: `${Math.max(0, Math.min(98, (marker.y / docBaseSize.baseHeight) * 100))}%`,
+                            }}
+                          >
+                            <span>{marker.label || '命中位置'}</span>
+                          </div>
+                        </div>
+                      ) : null
+                    }
+                  />
+                </div>
+              ) : null}
+            </section>
+          )}
+
           <section>
-            <h2>材料（{report.materials?.length ?? 0}）</h2>
+            <h2>材料与文件指纹（{report.materials?.length ?? 0}）</h2>
             <table className="grid compact">
-              <thead><tr><th>角色</th><th>页数</th><th>校验</th></tr></thead>
+              <thead><tr><th>角色</th><th>页数</th><th>SHA-256 指纹</th></tr></thead>
               <tbody>
                 {(report.materials ?? []).map((item, index) => (
                   <tr key={index}>
                     <td>{String(item.role)}</td>
                     <td>{String(item.pages)}</td>
-                    <td className="small muted">{item.sha256 ? String(item.sha256).slice(0, 16) + '…' : '未记录'}</td>
+                    <td className="small muted mono">{item.sha256 ? String(item.sha256).slice(0, 24) + '…' : '未记录'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -375,7 +742,7 @@ export default function ReportPage() {
           <div className="filters" style={{ marginBottom: 10 }}>
             <input
               className="search"
-              placeholder="搜索摘要 / 对方 / 金额 / 日期"
+              placeholder="搜索摘要 / 对方户名 / 金额 / 日期"
               value={keyword}
               onChange={(event) => {
                 setKeyword(event.target.value);
@@ -383,19 +750,19 @@ export default function ReportPage() {
               }}
             />
             <span className="muted small">
-              {txns === null ? '加载中…' : filteredTxns.length + ' 笔'}
+              {txns === null ? '加载中…' : `共 ${filteredTxns.length} 笔`}
             </span>
           </div>
           {txns && txns.length ? (
             <section>
-              <h3>金额分布</h3>
+              <h3>交易金额量级分布</h3>
               <AmountHistogram amounts={txns.filter((row) => row.amount).map((row) => Number(row.amount))} />
             </section>
           ) : null}
 
           <table className="grid compact">
             <thead>
-              <tr><th>日期</th><th>方向</th><th>金额</th><th>余额</th><th>摘要</th><th>对方</th><th>页</th></tr>
+              <tr><th>日期</th><th>方向</th><th>金额</th><th>余额</th><th>摘要</th><th>对方户名</th><th>页</th></tr>
             </thead>
             <tbody>
               {filteredTxns.slice(txnPage * PAGE, txnPage * PAGE + PAGE).map((row, offset) => (
@@ -405,9 +772,9 @@ export default function ReportPage() {
                   className={highlightRow === txnPage * PAGE + offset + 1 ? 'active-row' : ''}
                 >
                   <td className="small">{row.txn_date ?? '—'}</td>
-                  <td className="small">{row.direction === 'in' ? '入' : row.direction === 'out' ? '出' : '—'}</td>
-                  <td>{row.amount ?? '—'}</td>
-                  <td className="small muted">{row.balance ?? '—'}</td>
+                  <td className="small">{row.direction === 'in' ? '收入' : row.direction === 'out' ? '支出' : '—'}</td>
+                  <td className="mono">{row.amount ?? '—'}</td>
+                  <td className="small muted mono">{row.balance ?? '—'}</td>
                   <td className="small">{row.summary ?? ''}</td>
                   <td className="small muted">{row.counterparty_name ?? ''}</td>
                   <td className="small muted">{row.page_no ?? ''}</td>
@@ -434,8 +801,4 @@ export default function ReportPage() {
       ) : null}
     </div>
   );
-}
-
-function layerName(layer: string) {
-  return { file: '载体层', content: '内容层', ledger: '账务层', external: '外部层' }[layer] ?? layer;
 }

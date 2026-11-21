@@ -640,16 +640,13 @@ def _transactions_from_pages(
 
     for page_no, words in _page_list:
         if _layout:
-            words = _crop_by_layout(words, _layout, page_no, _total_pages)
+            words = _crop_by_layout(words, _layout, page_no - 1, _total_pages)
         page_footer: int | None = None
         page_summary = PageSummary(page_no=page_no)
         summaries.append(page_summary)
         lines = group_lines(words, y_tol=y_tol if y_tol else LINE_Y_TOLERANCE)
 
         header = find_header(lines, template.field_map if template else None)
-        page_footer: int | None = None
-        page_summary = PageSummary(page_no=page_no)
-        summaries.append(page_summary)
         if header is not None:
             header_line, tokens, mapping = header
             columns = build_columns(tokens, mapping, layout=getattr(template, "layout", None))

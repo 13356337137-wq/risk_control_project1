@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from db.models import MetricValue, Report, Task, Txn, User
 from db.session import get_session
-from helpers.security import current_user
+from helpers.security import current_user, require_banker
 
 import sys
 from pathlib import Path
@@ -24,14 +24,14 @@ router = APIRouter(tags=["reports"])
 
 def _check_task(db: Session, task_id: int, user: User) -> Task:
     task = db.get(Task, task_id)
-    if task is None:
-        raise HTTPException(404, "任务不存在")
+    if task is None or task.deleted_at is not None:
+        raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "任务不存在"})
     if user.role != "banker" and task.user_id != user.id:
         raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "任务不存在"})
     return task
 
 
-@router.get("/reports/{task_id}")
+@router.get("/reports/{task_id}", dependencies=[Depends(require_banker)])
 def get_report(task_id: int, db: Session = Depends(get_session), user: User = Depends(current_user)):
     _check_task(db, task_id, user)
     rep = db.execute(select(Report).where(Report.task_id == task_id).order_by(Report.version.desc())).scalars().first()
@@ -43,7 +43,7 @@ def get_report(task_id: int, db: Session = Depends(get_session), user: User = De
     return payload
 
 
-@router.get("/tasks/{task_id}/transactions")
+@router.get("/tasks/{task_id}/transactions", dependencies=[Depends(require_banker)])
 def get_transactions(task_id: int, limit: int = 500, db: Session = Depends(get_session),
                      user: User = Depends(current_user)):
     _check_task(db, task_id, user)
@@ -56,8 +56,9 @@ def get_transactions(task_id: int, limit: int = 500, db: Session = Depends(get_s
              "extra": r.extra} for r in rows]
 
 
-@router.get("/tasks/{task_id}/metrics")
-def get_metrics(task_id: int, db: Session = Depends(get_session)):
+@router.get("/tasks/{task_id}/metrics", dependencies=[Depends(require_banker)])
+def get_metrics(task_id: int, db: Session = Depends(get_session), user: User = Depends(current_user)):
+    _check_task(db, task_id, user)
     rows = db.execute(select(MetricValue).where(MetricValue.task_id == task_id).order_by(MetricValue.metric_code)).scalars().all()
     return [{"code": r.metric_code, "name": r.metric_name,
              "value": None if r.value_num is None else str(r.value_num),

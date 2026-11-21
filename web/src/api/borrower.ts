@@ -39,3 +39,27 @@ export function composeTask(fields: Record<string, string | undefined>, files: F
 export function getTask(taskId: number): Promise<TaskDetail> {
   return request<TaskDetail>('/tasks/' + taskId);
 }
+
+export type BorrowerTaskItem = {
+  id: number;
+  biz_no: string;
+  status: string;
+  carrier: string | null;
+  created_at: string | null;
+  bank_name: string | null;
+  period_start: string | null;
+  period_end: string | null;
+};
+
+export function listMyTasks(limit = 50): Promise<{ items: BorrowerTaskItem[]; total: number }> {
+  return request<{ items: BorrowerTaskItem[]; total: number }>('/tasks?limit=' + limit);
+}
+
+export function supplementTask(taskId: number, file: File): Promise<{ task_id: number; status: string }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return request<{ task_id: number; status: string }>('/tasks/' + taskId + '/supplement', {
+    form: formData,
+    timeoutMs: 180000,
+  });
+}

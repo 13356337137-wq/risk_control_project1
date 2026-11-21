@@ -1,15 +1,23 @@
 """后端入口：启动时自动建库建表，挂载任务/报告/模板接口。"""
 from contextlib import asynccontextmanager
 import logging
+from pathlib import Path as _Path
+import sys
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from db.session import init_db
 from helpers.logging_config import configure_logging
+from helpers.security import require_banker
 from routers import (audit, custom_metrics, dashboard, auth, entities, ocr_routing, reports,
                      tasks, templates, thresholds)
+
+_REPO_ROOT = _Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from rc_platform.api.app import router as rc_router  # noqa: E402
 
 logger = logging.getLogger("risk_control")
 
@@ -53,8 +61,10 @@ app = FastAPI(title=settings.app_name, version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://127.0.0.1:5174",
-                   "http://localhost:5173", "http://localhost:5174"],
+    allow_origins=[
+        "http://127.0.0.1:5173", "http://127.0.0.1:5174", "http://127.0.0.1:5175",
+        "http://localhost:5173", "http://localhost:5174", "http://localhost:5175",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -69,6 +79,7 @@ app.include_router(audit.router, prefix=settings.api_prefix)
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(thresholds.router, prefix=settings.api_prefix)
 app.include_router(ocr_routing.router, prefix=settings.api_prefix)
+app.include_router(rc_router, dependencies=[Depends(require_banker)])
 
 
 @app.get("/health")
@@ -132,14 +143,12 @@ class _SpaStaticFiles(_StaticFiles):
 
 
 _ROOT = _Path(__file__).resolve().parents[1]
+_WEB_DIST = _ROOT / "web" / "dist"
 _BORROWER_DIST = _ROOT / "frontend" / "dist"
 _PORTAL_DIR = _ROOT / "portal"
 _ADMIN_DIST = _ROOT / "frontend-admin" / "dist"
 
-if _ADMIN_DIST.exists():
-    app.mount("/bank", _SpaStaticFiles(directory=_ADMIN_DIST, html=True), name="bank")
-if _BORROWER_DIST.exists():
-    app.mount("/app", _SpaStaticFiles(directory=_BORROWER_DIST, html=True), name="borrower")
+
 @app.get("/portal", include_in_schema=False)
 @app.get("/portal/", include_in_schema=False)
 def _portal_redirect():
@@ -149,26 +158,31 @@ def _portal_redirect():
     return RedirectResponse(url="/", status_code=307)
 
 
-@app.get("/register", include_in_schema=False)
-async def register_page():
-    """借款侧自助注册页（只注册 borrower；银行侧由管理员创建）。"""
-    from fastapi.responses import FileResponse as _FR
+if _WEB_DIST.exists():
+    # 统一前端单页（web/dist）：挂载在根路径并处理 /login /register /app/* /bank/* 回退
+    app.mount("/", _SpaStaticFiles(directory=_WEB_DIST, html=True), name="web")
+else:
+    if _ADMIN_DIST.exists():
+        app.mount("/bank", _SpaStaticFiles(directory=_ADMIN_DIST, html=True), name="bank")
+    if _BORROWER_DIST.exists():
+        app.mount("/app", _SpaStaticFiles(directory=_BORROWER_DIST, html=True), name="borrower")
 
-    return _FR(str(_PORTAL_DIR / "register.html"))
+    @app.get("/register", include_in_schema=False)
+    async def register_page():
+        """借款侧自助注册页（只注册 borrower；银行侧由管理员创建）。"""
+        from fastapi.responses import FileResponse as _FR
 
+        return _FR(str(_PORTAL_DIR / "register.html"))
 
-@app.get("/login", include_in_schema=False)
-def _login_page():
-    """统一登录页：选身份后进入银行侧或借款侧。"""
-    from fastapi.responses import FileResponse
+    @app.get("/login", include_in_schema=False)
+    def _login_page():
+        """统一登录页：选身份后进入银行侧或借款侧。"""
+        from fastapi.responses import FileResponse
 
-    page = _PORTAL_DIR / "login.html"
-    if not page.exists():
-        raise HTTPException(404, detail="登录页缺失")
-    return FileResponse(page)
+        page = _PORTAL_DIR / "login.html"
+        if not page.exists():
+            raise HTTPException(404, detail="登录页缺失")
+        return FileResponse(page)
 
-
-if _PORTAL_DIR.exists():
-
-
-    app.mount("/", _StaticFiles(directory=_PORTAL_DIR, html=True), name="portal")
+    if _PORTAL_DIR.exists():
+        app.mount("/", _StaticFiles(directory=_PORTAL_DIR, html=True), name="portal")

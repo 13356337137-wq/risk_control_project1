@@ -12,7 +12,7 @@ import pathlib
 from decimal import Decimal
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -28,6 +28,7 @@ from rc_platform.lab import store as lab_store
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SAMPLES = ROOT / "algorithm" / "inputs" / "samples" / "synthetic"
 
+router = APIRouter()
 app = FastAPI(title="特征 Lab", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -146,7 +147,7 @@ def _rows_from_payload(rows: list[dict[str, Any]]):
     return out
 
 
-@app.get("/api/v1/features")
+@router.get("/api/v1/features")
 def list_feature_defs():
     from rc_platform.capabilities.features.defs import compute  # noqa: F401  确保包已注册算子
 
@@ -159,7 +160,7 @@ def list_feature_defs():
     return {"count": len(items), "items": items}
 
 
-@app.get("/api/v1/features/{code}")
+@router.get("/api/v1/features/{code}")
 def get_feature_def(code: str):
     for definition in _feature_defs():
         if definition.code == code:
@@ -167,7 +168,7 @@ def get_feature_def(code: str):
     raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": f"没有这个特征：{code}"})
 
 
-@app.post("/api/v1/features/compute")
+@router.post("/api/v1/features/compute")
 def compute_features(request: ComputeRequest):
     """给一批交易行（或一份合成样本）算特征；算不出来的把原因写在 reason 里。"""
     from rc_platform.capabilities.features.defs import compute
@@ -196,7 +197,7 @@ def compute_features(request: ComputeRequest):
     }
 
 
-@app.post("/api/v1/features/compute-file")
+@router.post("/api/v1/features/compute-file")
 async def compute_features_from_file(file: UploadFile, codes: str | None = Form(None)):
     """上传一份流水（PDF）直接算特征：解析 + 计算一次完成。"""
     from rc_platform.capabilities.features.defs import compute
@@ -218,17 +219,17 @@ async def compute_features_from_file(file: UploadFile, codes: str | None = Form(
     }
 
 
-@app.get("/api/v1/lab/operators")
+@router.get("/api/v1/lab/operators")
 def list_operators():
     return {"items": operator_catalog()}
 
 
-@app.get("/api/v1/lab/features")
+@router.get("/api/v1/lab/features")
 def list_features():
     return {"items": feature_catalog()}
 
 
-@app.get("/api/v1/lab/samples")
+@router.get("/api/v1/lab/samples")
 def list_samples():
     if not SAMPLES.exists():
         return {"items": []}
@@ -243,15 +244,15 @@ def list_samples():
     }
 
 
-@app.post("/api/v1/lab/inspect-file")
-async def inspect_upload(file: UploadFile, password: str | None = Form(None)):
+@router.post("/api/v1/lab/inspect-file")
+async def inspect_upload(file: UploadFile, password: str | None = Form(None), ocr_page: int = Form(0)):
     from rc_platform.capabilities.layout import inspect as layout_inspect
 
     data = await file.read()
     if not data:
         raise HTTPException(400, detail={"code": "E_PARAM", "message": "文件为空"})
     try:
-        return layout_inspect.inspect(data, password)
+        return layout_inspect.inspect(data, password, ocr_page=max(0, ocr_page))
     except ValueError as exc:
         # 口令问题单独一个码：前端据此弹口令输入框，而不是报「版式分析失败」
         raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
@@ -259,20 +260,25 @@ async def inspect_upload(file: UploadFile, password: str | None = Form(None)):
         raise HTTPException(422, detail={"code": "E_INSPECT", "message": f"版式分析失败：{exc}"}) from exc
 
 
-@app.post("/api/v1/lab/spread-file")
-async def spread_upload(file: UploadFile, keyword: str = Form(...), password: str | None = Form(None)):
+@router.post("/api/v1/lab/spread-file")
+async def spread_upload(
+    file: UploadFile,
+    keyword: str = Form(...),
+    password: str | None = Form(None),
+    page_index: int | None = Form(None),
+):
     from rc_platform.capabilities.layout import inspect as layout_inspect
 
     data = await file.read()
     if not data:
         raise HTTPException(400, detail={"code": "E_PARAM", "message": "文件为空"})
     try:
-        return layout_inspect.spread(data, keyword, password=password)
+        return layout_inspect.spread(data, keyword, page_index=page_index, password=password)
     except ValueError as exc:
         raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
 
 
-@app.get("/api/v1/lab/sample-file")
+@router.get("/api/v1/lab/sample-file")
 def sample_file(sample: str):
     from fastapi.responses import FileResponse
 
@@ -280,28 +286,28 @@ def sample_file(sample: str):
     return FileResponse(path, media_type="application/pdf")
 
 
-@app.get("/api/v1/lab/inspect")
-def inspect_sample(sample: str):
+@router.get("/api/v1/lab/inspect")
+def inspect_sample(sample: str, ocr_page: int = 0):
     from rc_platform.capabilities.layout import inspect as layout_inspect
 
     data = _sample_path(sample).read_bytes()
-    return layout_inspect.inspect(data)
+    return layout_inspect.inspect(data, ocr_page=max(0, ocr_page))
 
 
-@app.get("/api/v1/lab/spread")
-def spread_keyword(sample: str, keyword: str):
+@router.get("/api/v1/lab/spread")
+def spread_keyword(sample: str, keyword: str, page_index: int | None = None):
     from rc_platform.capabilities.layout import inspect as layout_inspect
 
     data = _sample_path(sample).read_bytes()
-    return layout_inspect.spread(data, keyword)
+    return layout_inspect.spread(data, keyword, page_index=page_index)
 
 
-@app.get("/api/v1/lab/custom")
+@router.get("/api/v1/lab/custom")
 def list_custom(include_history: bool = False):
     return {"items": lab_store.list_features(include_history=include_history)}
 
 
-@app.post("/api/v1/lab/custom")
+@router.post("/api/v1/lab/custom")
 def save_custom(request: CustomFeatureRequest):
     try:
         return lab_store.save_feature(
@@ -311,12 +317,12 @@ def save_custom(request: CustomFeatureRequest):
         raise HTTPException(422, detail={"code": "E_FEATURE", "message": str(exc)}) from exc
 
 
-@app.delete("/api/v1/lab/custom/{code}")
+@router.delete("/api/v1/lab/custom/{code}")
 def delete_custom(code: str):
     return {"code": code, "deleted": lab_store.delete_feature(code)}
 
 
-@app.post("/api/v1/lab/evaluate")
+@router.post("/api/v1/lab/evaluate")
 def evaluate(request: EvaluateRequest):
     expression = request.expr
     if not expression and request.code:
@@ -349,3 +355,6 @@ def evaluate(request: EvaluateRequest):
         "preview": preview,
         "rows": len(statement.rows),
     }
+
+
+app.include_router(router)

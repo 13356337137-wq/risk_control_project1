@@ -13,6 +13,8 @@ SATISFIED_BY: dict[str, set[str]] = {
     "amount": {"amount", "amount_in", "amount_out"},
     "direction": {"direction", "amount_in", "amount_out"},
     "txn_date": {"txn_date", "trade_time"},
+    "counterparty": {"counterparty", "counterparty_name"},
+    "counterparty_name": {"counterparty_name", "counterparty"},
 }
 
 

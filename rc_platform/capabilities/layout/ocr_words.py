@@ -30,11 +30,24 @@ def _backend():
     return _BACKEND
 
 
-def _iter_images(data: bytes, dpi: int):
-    if data[:5] == b"%PDF-":
+def _iter_images(data: bytes, dpi: int, password: str | None = None,
+                 page_indices: list[int] | None = None):
+    if b"%PDF-" in data[:1024]:
         doc = pymupdf.open(stream=data, filetype="pdf")
+        if doc.needs_pass:
+            if not password:
+                doc.close()
+                raise ValueError("PDF 设有打开口令，请输入口令后再分析")
+            if doc.authenticate(password) <= 0:
+                doc.close()
+                raise ValueError("口令不正确，请重新输入")
         try:
-            for page_no in range(doc.page_count):
+            targets = (
+                [i for i in page_indices if 0 <= i < doc.page_count]
+                if page_indices is not None
+                else list(range(doc.page_count))
+            )
+            for page_no in targets:
                 pix = doc[page_no].get_pixmap(dpi=dpi, alpha=False)
                 image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
                 yield page_no, cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -69,10 +82,11 @@ def _word_from_box(text: str, box, confidence: float) -> Word:
     )
 
 
-def read_pages_via_ocr(data: bytes, dpi: int = 200) -> list[PageWords]:
+def read_pages_via_ocr(data: bytes, dpi: int = 200, password: str | None = None,
+                       page_indices: list[int] | None = None) -> list[PageWords]:
     backend = _backend()
     pages: list[PageWords] = []
-    for page_no, image in _iter_images(data, dpi):
+    for page_no, image in _iter_images(data, dpi, password=password, page_indices=page_indices):
         raw, _ = backend(image)
         height, width = image.shape[:2]
         words: list[Word] = []

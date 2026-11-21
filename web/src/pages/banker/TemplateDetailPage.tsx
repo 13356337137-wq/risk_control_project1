@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  exportTemplateBlob,
   getTemplate,
+  getTemplateSample,
   getTemplateStats,
   previewTemplate,
   updateTemplateRequired,
@@ -11,20 +13,24 @@ import {
 } from '../../api/banker';
 import { getErrorMessage } from '../../api/errors';
 import { getUser } from '../../auth/store';
+import { bankLabel } from '../../components/annotate/types';
+import { labelOf } from '../../lib/columns';
 import { Button } from '../../ui/Button';
 import { Notice } from '../../ui/Notice';
 
-/** 可声明的必需列：这份版式里「一定要有的列」。缺了要在这儿说清，而不是让指标一片不可算。 */
 const CANDIDATES = [
-  'txn_date', 'trade_time', 'reference_no', 'summary', 'counterparty_name',
-  'direction', 'amount', 'amount_in', 'amount_out', 'balance', 'account_no',
+  'txn_date',
+  'trade_time',
+  'reference_no',
+  'summary',
+  'counterparty_name',
+  'direction',
+  'amount',
+  'amount_in',
+  'amount_out',
+  'balance',
+  'account_no',
 ];
-
-const FIELD_LABEL: Record<string, string> = {
-  txn_date: '交易日期', trade_time: '交易时间', reference_no: '流水号', summary: '摘要',
-  counterparty_name: '对方户名', direction: '借贷标志', amount: '交易金额',
-  amount_in: '收入金额', amount_out: '支出金额', balance: '余额', account_no: '卡号/账号',
-};
 
 export default function TemplateDetailPage() {
   const { id } = useParams();
@@ -41,34 +47,58 @@ export default function TemplateDetailPage() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const load = () => {
+  useEffect(() => {
+    setError('');
+    setMessage('');
     Promise.all([getTemplate(templateId), getTemplateStats(templateId)])
       .then(([detail, statistics]) => {
         setTemplate(detail);
         setStats(statistics);
-        // 默认只要最必要的三列：全选会让「某一列本来就没值」也报缺列
         setRequired(detail.required_fields ?? ['txn_date', 'amount', 'balance']);
       })
       .catch((err) => setError(getErrorMessage(err, 'banker')));
-  };
+  }, [templateId]);
 
-  useEffect(load, [templateId]);
-
-  async function onPreview(file: File | null) {
-    if (!file) return;
+  async function runPreviewBlob(blob: Blob) {
     setBusy(true);
     setError('');
     setMessage('');
     setPreview(null);
     try {
-      const result = await previewTemplate(templateId, file, password || undefined);
+      const result = await previewTemplate(templateId, blob, password || undefined);
       setPreview(result);
     } catch (err) {
       const code = (err as { code?: string }).code;
-      if (code === 'E_ENCRYPT') setMessage('这份 PDF 设有打开口令，填在下面再试一次。');
+      if (code === 'E_ENCRYPT') setMessage('这份 PDF 设有打开口令，填在下方再试一次。');
       else setError(getErrorMessage(err, 'banker'));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onPreviewSample() {
+    setBusy(true);
+    setError('');
+    try {
+      const blob = await getTemplateSample(templateId);
+      await runPreviewBlob(blob);
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
+      setBusy(false);
+    }
+  }
+
+  async function onExport() {
+    try {
+      const blob = await exportTemplateBlob(templateId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `template-${template?.bank_code ?? templateId}-v${template?.version ?? 1}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(getErrorMessage(err, 'banker'));
     }
   }
 
@@ -78,8 +108,7 @@ export default function TemplateDetailPage() {
     setMessage('');
     try {
       const result = await updateTemplateRequired(templateId, required);
-      // 改必需列 = 出新版本（旧版本保留），所以要跳到新 id，否则页面读回的还是旧值
-      setMessage('必需列已保存为模板 #' + result.id + '（v' + result.version + ' 草稿，旧版本保留）。');
+      setMessage(`必需列已保存为模板 #${result.id}（v${result.version} 草稿，旧版本保留）。`);
       navigate('/bank/templates/' + result.id, { replace: true });
     } catch (err) {
       setError(getErrorMessage(err, 'banker'));
@@ -92,20 +121,30 @@ export default function TemplateDetailPage() {
   if (!template) return <p className="muted">加载中…</p>;
 
   const mapped = Object.keys(template.field_map ?? {});
+  const layObj = (template.layout || {}) as { tables?: unknown[]; meta_boxes?: unknown[]; custom_fields?: { key: string; label: string }[] };
+  const customMap = Object.fromEntries((layObj.custom_fields || []).map((c) => [c.key, c.label]));
+  const fieldName = (k: string) => customMap[k] ?? labelOf(k);
 
   return (
     <div className="panel wide">
       <header className="panel-head">
         <div>
-          <h1>{template.bank_code} v{template.version}</h1>
+          <h1>
+            {bankLabel(template.bank_code)} ({template.bank_code}) v{template.version}
+          </h1>
           <p className="sub">
             模板 #{template.id} · 状态 {template.status === 'enabled' ? '在用' : template.status === 'draft' ? '草稿' : '停用'}
             {' '}· 已标 {mapped.length} 列
+            {layObj.tables?.length ? ` · ${layObj.tables.length} 个表格区框选` : ''}
+            {template.sample_file_id ? ' · 含原件样本' : ' · 暂无原件样本'}
           </p>
         </div>
         <div className="filters">
-          <Link className="btn btn-ghost" to={'/bank/templates/' + template.id + '/layout'}>看版式</Link>
-          <button className="btn btn-ghost" onClick={() => navigate('/bank/annotate')}>重新标注</button>
+          <Button size="sm" onClick={() => navigate('/bank/annotate?templateId=' + template.id)}>
+            在画布中编辑框选
+          </Button>
+          <Link className="btn btn-ghost" to={'/bank/templates/' + template.id + '/layout'}>看版式图</Link>
+          <button type="button" className="btn btn-ghost" onClick={() => void onExport()}>导出 JSON</button>
           <Link className="btn btn-ghost" to="/bank/templates">回到列表</Link>
         </div>
       </header>
@@ -114,26 +153,37 @@ export default function TemplateDetailPage() {
       {message ? <Notice tone="ok">{message}</Notice> : null}
 
       <section className="score-row">
-        <div className="score"><span className="score-value">{stats?.tasks_total ?? 0}</span><span className="muted small">用它的任务</span></div>
+        <div className="score"><span className="score-value">{stats?.tasks_total ?? 0}</span><span className="muted small">命中任务</span></div>
         <div className="score"><span className="score-value">{stats?.success_rate == null ? '—' : Math.round(stats.success_rate * 100) + '%'}</span><span className="muted small">成功率</span></div>
         <div className="score"><span className="score-value">{stats?.avg_txn_count ?? '—'}</span><span className="muted small">平均笔数</span></div>
         <div className="score"><span className="score-value">{stats?.zero_txn_tasks ?? 0}</span><span className="muted small">零笔任务</span></div>
       </section>
 
-      {/* 试跑：模板保存完就能验，不必去借款侧走一遍真任务 */}
       <section>
-        <h2>试跑（可选，不落库）</h2>
+        <h2>试跑（不落库）</h2>
         <p className="muted small">
-          拿一份该银行的文件试一遍：能出几笔、每页各几笔、缺了哪些必需列。这一步不通，就别启用。
+          拿一份同版式的文件试一遍：能出几笔、每页各几笔、单值（卡号/户名）与必需列是否完整。试跑不通先别启用。
         </p>
         <div className="try-row">
-          <input type="file" accept=".pdf" onChange={(event) => void onPreview(event.target.files?.[0] ?? null)} />
+          <input
+            type="file"
+            accept=".pdf,image/png,image/jpeg,image/webp"
+            onChange={(event) => {
+              const f = event.target.files?.[0];
+              if (f) void runPreviewBlob(f);
+            }}
+          />
           <input
             type="password"
             placeholder="口令（加密件才填）"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />
+          {template.sample_file_id ? (
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void onPreviewSample()}>
+              用自带样本试跑
+            </Button>
+          ) : null}
           {busy ? <span className="muted small">试跑中…</span> : null}
         </div>
 
@@ -142,22 +192,31 @@ export default function TemplateDetailPage() {
             <div className="score-row">
               <div className="score"><span className="score-value">{preview.txn_count}</span><span className="muted small">读出笔数</span></div>
               <div className="score"><span className="score-value">{preview.page_count}</span><span className="muted small">页数</span></div>
-              <div className="score"><span className="score-value">{preview.present_columns.length}</span><span className="muted small">命中列</span></div>
+              <div className="score"><span className="score-value">{preview.present_columns.length}</span><span className="muted small">命中必需列</span></div>
               <div className="score">
-                <span className={'score-value' + (preview.missing_columns.length ? ' bad' : '')}>
+                <span className={'score-value' + (preview.missing_columns.length || preview.empty_columns.length ? ' bad' : '')}>
                   {preview.missing_columns.length + preview.empty_columns.length}
                 </span>
-                <span className="muted small">缺列</span>
+                <span className="muted small">缺漏项</span>
               </div>
             </div>
 
+            {preview.meta && (preview.meta.account_no || preview.meta.account_name || preview.meta.bank_branch) ? (
+              <div className="ann-meta-chips" style={{ marginBottom: 10 }}>
+                {preview.meta.account_no && <span className="ann-meta-chip">卡号/账号：<b>{preview.meta.account_no}</b></span>}
+                {preview.meta.account_name && <span className="ann-meta-chip">户名：<b>{preview.meta.account_name}</b></span>}
+                {preview.meta.bank_branch && <span className="ann-meta-chip">开户行：<b>{preview.meta.bank_branch}</b></span>}
+                {preview.meta.account_type && <span className="ann-meta-chip">账户类型：<b>{preview.meta.account_type}</b></span>}
+              </div>
+            ) : null}
+
             {preview.missing_columns.length || preview.empty_columns.length ? (
               <Notice>
-                未读到：{preview.missing_columns.concat(preview.empty_columns).map((f) => FIELD_LABEL[f] ?? f).join('、')}
-                。未标注的列去「重新标注」补上；标了但读不到，多半是列带位置偏了。
+                未读到：{preview.missing_columns.concat(preview.empty_columns).map(fieldName).join('、')}
+                。未标注的列点右上角「在画布中编辑框选」补上；已标但未读到，多半是列框位置偏了或表头线太低。
               </Notice>
             ) : (
-              <p className="muted small">必需列都读到了。</p>
+              <p className="muted small">必需列均已命中且有值。</p>
             )}
 
             {preview.warnings.length ? (
@@ -167,11 +226,11 @@ export default function TemplateDetailPage() {
             ) : null}
 
             <table className="grid compact">
-              <thead><tr><th>页</th><th>笔数</th><th>页眉</th></tr></thead>
+              <thead><tr><th>页码</th><th>笔数</th><th>页眉单值</th></tr></thead>
               <tbody>
                 {preview.pages.map((page) => (
                   <tr key={page.page_no}>
-                    <td>{page.page_no + 1}</td>
+                    <td>第 {page.page_no} 页</td>
                     <td>{page.rows}</td>
                     <td className="small muted">{page.header_found ? '识别到' : '未识别'}</td>
                   </tr>
@@ -180,16 +239,19 @@ export default function TemplateDetailPage() {
             </table>
 
             <table className="grid compact">
-              <thead><tr><th>日期</th><th>方向</th><th>金额</th><th>余额</th><th>摘要</th><th>页</th></tr></thead>
+              <thead>
+                <tr><th>日期</th><th>方向</th><th>金额</th><th>余额</th><th>摘要</th><th>对方户名</th><th>页</th></tr>
+              </thead>
               <tbody>
                 {preview.rows.map((row, index) => (
                   <tr key={index}>
                     <td className="small">{row.txn_date ?? '—'}</td>
                     <td className="small">{row.direction === 'in' ? '入' : row.direction === 'out' ? '出' : '—'}</td>
-                    <td>{row.amount ?? '—'}</td>
-                    <td className="small muted">{row.balance ?? '—'}</td>
+                    <td className="mono">{row.amount ?? '—'}</td>
+                    <td className="small muted mono">{row.balance ?? '—'}</td>
                     <td className="small">{row.summary ?? ''}</td>
-                    <td className="small muted">{pageNo(row.page_no)}</td>
+                    <td className="small">{row.counterparty ?? '—'}</td>
+                    <td className="small muted">{row.page_no || '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -198,11 +260,10 @@ export default function TemplateDetailPage() {
         ) : null}
       </section>
 
-      {/* 必需列 */}
       <section>
-        <h2>必需列（可选，{required.length}）</h2>
+        <h2>必需列（{required.length}）</h2>
         <p className="muted small">
-          勾上「这份版式一定有的列」。解析时若没读到，报告会直接写「模板缺列：xxx」，而不是让指标悄悄变成不可算。
+          勾上「这份版式一定有的列」。解析时若没读到，报告会明示缺列原因，避免静默漏算指标。
         </p>
         <div className="chips">
           {CANDIDATES.map((field) => {
@@ -210,11 +271,12 @@ export default function TemplateDetailPage() {
             return (
               <button
                 key={field}
+                type="button"
                 className={'chip' + (on ? ' chip-on' : '')}
                 disabled={!isAdmin}
                 onClick={() => setRequired(on ? required.filter((f) => f !== field) : [...required, field])}
               >
-                {FIELD_LABEL[field] ?? field}
+                {fieldName(field)}
               </button>
             );
           })}
@@ -231,11 +293,11 @@ export default function TemplateDetailPage() {
       <section>
         <h2>字段映射（{mapped.length} 项）</h2>
         <table className="grid compact">
-          <thead><tr><th>规范字段</th><th>对应列</th><th>必需</th></tr></thead>
+          <thead><tr><th>规范字段</th><th>对应列名</th><th>必需</th></tr></thead>
           <tbody>
             {Object.entries(template.field_map ?? {}).map(([field, target]) => (
               <tr key={field}>
-                <td title={field}>{FIELD_LABEL[field] ?? field}</td>
+                <td title={field}>{fieldName(field)}</td>
                 <td className="small muted">{String(target)}</td>
                 <td className="small muted">{required.includes(field) ? '是' : ''}</td>
               </tr>
@@ -243,14 +305,6 @@ export default function TemplateDetailPage() {
           </tbody>
         </table>
       </section>
-
-      <p className="muted small">
-        零笔任务不为 0 说明模板在这批文件上没读出行——那是「模板不匹配」的信号，应该重采或加外推兜底。
-      </p>
     </div>
   );
-}
-
-function pageNo(value: number) {
-  return Number.isFinite(value) ? value + 1 : '—';
 }

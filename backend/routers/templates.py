@@ -23,6 +23,9 @@ class TemplateIn(BaseModel):
     bank_code: str
     field_map: dict
     header_columns: list | None = None
+    layout: dict | None = None
+    required_fields: list[str] | None = None
+    sample_file_id: int | None = None
     version: int = 1
 
 
@@ -38,6 +41,8 @@ def list_templates(bank_code: str | None = None, include_deleted: bool = False,
     return [{"id": t.id, "bank_code": t.bank_code, "version": t.version,
              "status": t.status, "field_map": t.field_map, "header_columns": t.header_columns,
              "required_fields": t.required_fields,
+             "has_layout": bool(t.layout and (t.layout.get("tables") or t.layout.get("boxes"))),
+             "has_sample": t.sample_file_id is not None,
              "created_at": t.created_at.isoformat() if t.created_at else None,
              "updated_at": t.updated_at.isoformat() if t.updated_at else None} for t in rows]
 
@@ -49,10 +54,22 @@ def create_template(payload: TemplateIn, db: Session = Depends(get_session)):
         select(func.max(Template.version)).where(
             Template.bank_code == bank, Template.deleted_at.is_(None))
     ).scalar() or 0
-    row = Template(bank_code=bank, version=latest + 1,
-                   status="draft", field_map=payload.field_map, header_columns=payload.header_columns)
-    db.add(row); db.commit(); db.refresh(row)
-    return {"id": row.id, "status": row.status}
+    row = Template(
+        bank_code=bank,
+        version=latest + 1,
+        status="draft",
+        field_map=payload.field_map,
+        header_columns=payload.header_columns,
+        layout=payload.layout,
+        required_fields=payload.required_fields,
+        sample_file_id=payload.sample_file_id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    _audit_template(db, "create_template", row.id, f"新建 {row.bank_code} v{row.version}")
+    db.commit()
+    return {"id": row.id, "version": row.version, "status": row.status}
 
 
 @router.post("/{template_id}/publish", dependencies=[Depends(require_admin)])
@@ -60,12 +77,19 @@ def publish_template(template_id: int, db: Session = Depends(get_session)):
     row = db.get(Template, template_id)
     if row is None:
         raise HTTPException(404, "模板不存在")
+    if row.deleted_at is not None:
+        raise HTTPException(400, detail={"code": "E_STATE", "message": "已删除的模板不能启用，请先恢复"})
     # 同一银行只允许一个启用版本
-    others = db.execute(select(Template).where(Template.bank_code == row.bank_code)).scalars().all()
+    others = db.execute(
+        select(Template).where(Template.bank_code == row.bank_code, Template.deleted_at.is_(None))
+    ).scalars().all()
     for o in others:
-        o.status = "enabled" if o.id == row.id else "disabled"
+        if o.id == row.id:
+            o.status = "enabled"
+        elif o.status == "enabled":
+            o.status = "disabled"
+            _audit_template(db, "disable_template", o.id, f"被新版本替代：{o.bank_code} v{o.version}")
     _audit_template(db, "publish_template", row.id, f"启用 {row.bank_code} v{row.version}")
-    _audit_template(db, "disable_template", row.id, f"停用 {row.bank_code} v{row.version}")
     db.commit()
     return {"id": row.id, "status": row.status}
 
@@ -288,9 +312,13 @@ def infer_template_api(
                 raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": "PDF 需要打开口令"})
             import tempfile
 
-            tmp = _Path(tempfile.gettempdir()) / "infer_plain.pdf"
-            doc.save(tmp, encryption=pymupdf.PDF_ENCRYPT_NONE)
-            data = tmp.read_bytes()
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                tmp = _Path(tf.name)
+            try:
+                doc.save(tmp, encryption=pymupdf.PDF_ENCRYPT_NONE)
+                data = tmp.read_bytes()
+            finally:
+                tmp.unlink(missing_ok=True)
     try:
         result = infer_from_marks(data, parsed_marks, bank_code=bank_code)
     except ValueError as exc:
@@ -333,7 +361,7 @@ def infer_template_api(
             "page_count": parsed.page_count,
             "base_page": int(parsed_marks[0].get("page") or 0),
             "pages": [
-                {"page_no": pno, "rows": per_page.get(pno, 0), "header_found": pno in hdr_pages}
+                {"page_no": pno + 1, "rows": per_page.get(pno + 1, 0), "header_found": (pno + 1) in hdr_pages}
                 for pno in range(parsed.page_count or 0)
             ],
         }
@@ -379,7 +407,7 @@ def update_template(template_id: int, payload: TemplatePatch, db: Session = Depe
     from datetime import datetime as _dt_now  # noqa: PLC0415
 
     row = db.get(Template, template_id)
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(404, "模板不存在")
     latest = db.execute(select(func.max(Template.version)).where(
         Template.bank_code == (payload.bank_code or row.bank_code).upper()
@@ -409,7 +437,7 @@ def update_template(template_id: int, payload: TemplatePatch, db: Session = Depe
 def get_template(template_id: int, db: Session = Depends(get_session)):
     """取单个模板（含 layout 与 field_map）：模板详情页与「改框画范围」都要用。"""
     row = db.get(Template, template_id)
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(404, "模板不存在")
     return {
         "id": row.id, "bank_code": row.bank_code, "version": row.version,
@@ -430,7 +458,7 @@ def template_sample(template_id: int, db: Session = Depends(get_session)):
     from db.models import FileObj
 
     row = db.get(Template, template_id)
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(404, "模板不存在")
     if not row.sample_file_id:
         raise HTTPException(404, detail={"code": "E_NOT_FOUND",
@@ -447,22 +475,32 @@ def template_sample(template_id: int, db: Session = Depends(get_session)):
 @router.post("/{template_id}/duplicate", dependencies=[Depends(require_admin)])
 def duplicate_template(template_id: int, db: Session = Depends(get_session)):
     row = db.get(Template, template_id)
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(404, "模板不存在")
     latest = db.execute(select(func.max(Template.version)).where(
         Template.bank_code == row.bank_code)).scalar() or row.version
-    copy = Template(bank_code=row.bank_code, version=latest + 1, status="draft",
-                    field_map=row.field_map, header_columns=row.header_columns)
+    copy = Template(
+        bank_code=row.bank_code,
+        version=latest + 1,
+        status="draft",
+        field_map=row.field_map,
+        header_columns=row.header_columns,
+        layout=row.layout,
+        required_fields=row.required_fields,
+        sample_file_id=row.sample_file_id,
+    )
     db.add(copy)
     db.commit()
     db.refresh(copy)
+    _audit_template(db, "duplicate_template", copy.id, f"复制自 v{row.version} (#{row.id})")
+    db.commit()
     return {"id": copy.id, "version": copy.version}
 
 
 @router.post("/{template_id}/disable", dependencies=[Depends(require_admin)])
 def disable_template(template_id: int, db: Session = Depends(get_session)):
     row = db.get(Template, template_id)
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(404, "模板不存在")
     row.status = "disabled"
     db.commit()
@@ -530,42 +568,21 @@ def template_stats(template_id: int, db: Session = Depends(get_session)):
     }
 
 
-@router.post("/{template_id}/preview")
-def preview_template(template_id: int, file: UploadFile = File(...), password: str | None = Form(None),
-                     db: Session = Depends(get_session)):
-    # 用该模板试解析一份样例，不落库
-    row = db.get(Template, template_id)
-    if row is None:
-        raise HTTPException(404, "模板不存在")
-    data = file.file.read()
-    if not data:
-        raise HTTPException(400, "文件为空")
-    from algorithm.ocr.parse import parse
-    from services.template_parse import build_template
-    # 加密件必须先解成明文副本：算法侧 parse 只认明文，直接喂加密字节会"成功"返回 0 笔
-    from services.analysis import EncryptedFile, plain_bytes  # noqa: PLC0415
-
-    try:
-        raw = plain_bytes(data, password)
-    except EncryptedFile as exc:
-        raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
-    # 与真实解析共用同一个构造函数：带 layout（列边界）与 meta_boxes（卡号/户名这类单值）
-    tpl = build_template(bank_code=row.bank_code, version=row.version,
-                         field_map=row.field_map, layout=row.layout)
-    parsed = parse(raw, tpl)
-
-    # 逐页统计：用户要看到「模板在第 2、3…页还好不好用」，只给总笔数看不出问题页
+def _run_preview(raw: bytes, bank_code: str, version: int, field_map: dict,
+                 layout: dict | None, required_fields: list[str] | None, template_id: int | None = None) -> dict:
     from collections import Counter
 
-    # 交易的 page_no 是 1 起的（与报告、流水列表一致），逐页统计必须对齐同一个口径，
-    # 否则会出现「总笔数 6、每页都是 0 笔」这种自相矛盾的试跑结果
+    from algorithm.ocr.parse import parse
+    from services.template_checks import missing_required
+    from services.template_parse import build_template
+
+    tpl = build_template(bank_code=bank_code, version=version, field_map=field_map, layout=layout)
+    parsed = parse(raw, tpl)
     per_page = Counter(t.page_no or 1 for t in parsed.transactions)
     header_by_page = {h.page_no: h for h in (parsed.headers or [])}
     pages = []
     for pno in range(1, (parsed.page_count or 0) + 1):
         h = header_by_page.get(pno)
-        # PageHeader 是「跨页可比对字段」（账号/户名/起止日期），不是列清单；
-        # 有它说明这一页的页眉被识别到了，能用来判断「后续页是否还是同一账户同一期间」。
         has_header = bool(h and any([
             getattr(h, "account_no", None) is not None,
             getattr(h, "account_name", None) is not None,
@@ -580,24 +597,22 @@ def preview_template(template_id: int, file: UploadFile = File(...), password: s
 
     rows = [
         {
-            "txn_date": t.txn_date, "summary": t.summary, "direction": t.direction,
+            "txn_date": t.txn_date,
+            "summary": t.summary,
+            "counterparty": getattr(t, "counterparty_name", None),
+            "reference_no": getattr(t, "reference_no", None),
+            "direction": t.direction,
             "amount": None if t.amount is None else str(t.amount),
             "balance": None if t.balance is None else str(t.balance),
             "page_no": t.page_no,
+            "extra": getattr(t, "extra", None),
         }
-        for t in parsed.transactions[:12]
+        for t in parsed.transactions[:15]
     ]
-    # 缺列诊断：模板说「这份版式一定有这些列」，实际切列时却没切出来——
-    # 这种问题以前要等到指标一片空才发现，现在试跑时就说清楚。
-    from algorithm.ocr.parse import build_columns as _bc  # noqa: PLC0415
-
-    from services.template_checks import missing_required  # noqa: PLC0415
-
-    mapped = set((row.field_map or {}).keys())
-    present = set((row.required_fields or [])) & mapped
-    required = list(row.required_fields or [])
-    missing = missing_required(row.field_map, required)
-    # 再按实际解析结果核一遍：列在 field_map 里、但 12 笔里一个值都没有，也算没读出来
+    mapped = set((field_map or {}).keys())
+    required = list(required_fields or [])
+    present = set(required) & mapped
+    missing = missing_required(field_map, required)
     empty = []
     for field in required:
         if field in missing:
@@ -606,13 +621,27 @@ def preview_template(template_id: int, file: UploadFile = File(...), password: s
             if not any(getattr(t, field, None) not in (None, "") for t in parsed.transactions):
                 empty.append(field)
 
+    def _first_header_val(field_name: str) -> str | None:
+        for hdr in (parsed.headers or []):
+            hf = getattr(hdr, field_name, None)
+            val = getattr(hf, "value", None) if hf is not None else hf
+            if val:
+                return str(val)
+        return None
+
     return {
-        "template_id": row.id,
+        "template_id": template_id,
         "txn_count": len(parsed.transactions),
         "page_count": parsed.page_count,
         "pages": pages,
-        "warnings": parsed.warnings[:8],
+        "warnings": (parsed.warnings or [])[:8],
         "rows": rows,
+        "meta": {
+            "account_no": _first_header_val("account_no"),
+            "account_name": _first_header_val("account_name"),
+            "bank_branch": _first_header_val("bank_branch"),
+            "account_type": _first_header_val("account_type"),
+        },
         "required_fields": required,
         "missing_columns": missing,
         "empty_columns": empty,
@@ -620,14 +649,152 @@ def preview_template(template_id: int, file: UploadFile = File(...), password: s
     }
 
 
+@router.post("/preview-draft")
+def preview_draft_template(
+    bank_code: str = Form("UNKNOWN"),
+    field_map: str = Form("{}"),
+    layout: str = Form("{}"),
+    required_fields: str = Form("[]"),
+    password: str | None = Form(None),
+    file: UploadFile = File(...),
+):
+    """未保存先试跑：按画布当前的 layout + field_map 立刻试解析，把真实笔数、样例行与单值反馈给标注员。"""
+    from services.analysis import EncryptedFile, plain_bytes
+
+    data = file.file.read()
+    if not data:
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "文件为空"})
+    try:
+        raw = plain_bytes(data, password)
+    except EncryptedFile as exc:
+        raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
+    try:
+        fmap = json.loads(field_map) if field_map else {}
+        lay = json.loads(layout) if layout else {}
+        req = json.loads(required_fields) if required_fields else []
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": f"标注 JSON 不合法：{exc}"}) from exc
+    return _run_preview(raw, bank_code.upper(), 0, fmap, lay, req, template_id=None)
+
+
+@router.post("/save-from-canvas")
+def save_template_from_canvas(
+    bank_code: str = Form(...),
+    field_map: str = Form(...),
+    layout: str = Form(...),
+    required_fields: str = Form("[]"),
+    header_columns: str | None = Form(None),
+    template_id: int | None = Form(None),
+    publish: bool = Form(False),
+    file: UploadFile | None = File(None),
+    db: Session = Depends(get_session),
+    user=Depends(require_banker),
+):
+    """画布一站式保存：只产生一个新版本，同时把样本文件与 layout/required_fields 存齐；管理员可直接启用。"""
+    try:
+        fmap = json.loads(field_map)
+        lay = json.loads(layout)
+        req = json.loads(required_fields) if required_fields else []
+        hcols = json.loads(header_columns) if header_columns else None
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": f"模板 JSON 不合法：{exc}"}) from exc
+
+    if not isinstance(fmap, dict) or not fmap:
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "至少要标出一列字段再保存"})
+
+    bank = bank_code.strip().upper()
+    if not bank:
+        raise HTTPException(400, detail={"code": "E_PARAM", "message": "缺少银行代码"})
+
+    sample_file_id: int | None = None
+    prev_row = None
+    if template_id is not None:
+        prev_row = db.get(Template, template_id)
+        if prev_row is None or prev_row.deleted_at is not None:
+            raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "模板不存在或已删除"})
+        sample_file_id = prev_row.sample_file_id
+    if file is not None:
+        data = file.file.read()
+        if data:
+            sample_file_id = _store_sample(db, file.filename or "sample.pdf", data)
+
+    latest = db.execute(
+        select(func.max(Template.version)).where(Template.bank_code == bank, Template.deleted_at.is_(None))
+    ).scalar() or 0
+
+    can_publish = bool(publish and getattr(user, "is_admin", False))
+    new_row = Template(
+        bank_code=bank,
+        version=latest + 1,
+        status="enabled" if can_publish else "draft",
+        field_map=fmap,
+        header_columns=hcols or list(fmap.values()),
+        layout=lay,
+        required_fields=req,
+        sample_file_id=sample_file_id,
+    )
+    if can_publish:
+        others = db.execute(
+            select(Template).where(Template.bank_code == bank, Template.deleted_at.is_(None))
+        ).scalars().all()
+        for o in others:
+            if o.status == "enabled":
+                o.status = "disabled"
+                _audit_template(db, "disable_template", o.id, f"被新版本替代：{bank} v{o.version}")
+
+    db.add(new_row)
+    db.commit()
+    db.refresh(new_row)
+    _audit_template(
+        db,
+        "publish_template" if can_publish else "create_template",
+        new_row.id,
+        f"画布保存 {bank} v{new_row.version}" + ("（已直接启用）" if can_publish else "（草稿）"),
+    )
+    db.commit()
+    return {
+        "id": new_row.id,
+        "bank_code": new_row.bank_code,
+        "version": new_row.version,
+        "status": new_row.status,
+        "has_sample": new_row.sample_file_id is not None,
+    }
+
+
+@router.post("/{template_id}/preview")
+def preview_template(template_id: int, file: UploadFile = File(...), password: str | None = Form(None),
+                     db: Session = Depends(get_session)):
+    # 用该模板试解析一份样例，不落库
+    row = db.get(Template, template_id)
+    if row is None or row.deleted_at is not None:
+        raise HTTPException(404, "模板不存在")
+    data = file.file.read()
+    if not data:
+        raise HTTPException(400, "文件为空")
+    from services.analysis import EncryptedFile, plain_bytes
+
+    try:
+        raw = plain_bytes(data, password)
+    except EncryptedFile as exc:
+        raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": str(exc)}) from exc
+    return _run_preview(
+        raw, row.bank_code, row.version,
+        row.field_map or {}, row.layout, row.required_fields, template_id=row.id,
+    )
+
+
 @router.get("/{template_id}/export")
 def export_template(template_id: int, db: Session = Depends(get_session)):
     row = db.get(Template, template_id)
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(404, "模板不存在")
     payload = {
-        "bank_code": row.bank_code, "version": row.version, "field_map": row.field_map,
+        "bank_code": row.bank_code,
+        "version": row.version,
+        "field_map": row.field_map,
         "header_columns": row.header_columns,
+        "layout": row.layout,
+        "required_fields": row.required_fields,
     }
     return Response(
         content=json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
@@ -645,11 +812,20 @@ def import_template(payload: dict, db: Session = Depends(get_session)):
     if not isinstance(field_map, dict) or not field_map:
         raise HTTPException(400, detail={"code": "E_PARAM", "message": "field_map 不能为空"})
     latest = db.execute(select(func.max(Template.version)).where(Template.bank_code == bank)).scalar() or 0
-    row = Template(bank_code=bank, version=latest + 1, status="draft",
-                   field_map=field_map, header_columns=payload.get("header_columns"))
+    row = Template(
+        bank_code=bank,
+        version=latest + 1,
+        status="draft",
+        field_map=field_map,
+        header_columns=payload.get("header_columns"),
+        layout=payload.get("layout"),
+        required_fields=payload.get("required_fields"),
+    )
     db.add(row)
     db.commit()
     db.refresh(row)
+    _audit_template(db, "import_template", row.id, f"导入 {bank} v{row.version}")
+    db.commit()
     return {"id": row.id, "version": row.version, "bank_code": row.bank_code}
 
 
@@ -663,13 +839,22 @@ def _store_sample(db: Session, filename: str, data: bytes) -> int:
     exists = db.execute(select(FileObj).where(FileObj.sha256 == digest)).scalars().first()
     if exists:
         return exists.id
+    lower = (filename or "").lower()
+    is_pdf = b"%PDF-" in data[:1024] or lower.endswith(".pdf")
+    if is_pdf:
+        ext, mime, carrier = ".pdf", "application/pdf", "electronic"
+    elif lower.endswith(".png") or data[:8].startswith(b"\x89PNG"):
+        ext, mime, carrier = ".png", "image/png", "image"
+    else:
+        ext, mime, carrier = ".jpg", "image/jpeg", "image"
+
     storage = _Path(__file__).resolve().parents[1] / "storage" / "uploads"
     storage.mkdir(parents=True, exist_ok=True)
-    path = storage / (digest + ".pdf")
+    path = storage / (digest + ext)
     if not path.exists():
         path.write_bytes(data)
-    row = FileObj(sha256=digest, mime="application/pdf", carrier="electronic",
-                  pages=None, has_text_layer=True, storage_path=str(path))
+    row = FileObj(sha256=digest, mime=mime, carrier=carrier,
+                  pages=None, has_text_layer=is_pdf, storage_path=str(path))
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -680,7 +865,7 @@ def _store_sample(db: Session, filename: str, data: bytes) -> int:
 def get_template_layout(template_id: int, db: Session = Depends(get_session)):
     """模板当时的框选（页面尺寸 + 每个字段的方框）与样本是否可回看。"""
     row = db.get(Template, template_id)
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(404, "模板不存在")
     return {
         "template_id": row.id,
@@ -699,7 +884,7 @@ def get_template_layout_png(template_id: int, page: int = 0, dpi: int = 140, db:
     from db.models import FileObj
 
     row = db.get(Template, template_id)
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(404, "模板不存在")
     if not row.sample_file_id or not row.layout:
         raise HTTPException(404, detail={"code": "E_NO_SAMPLE", "message": "该模板没有可回看的样本（旧版本模板）"})

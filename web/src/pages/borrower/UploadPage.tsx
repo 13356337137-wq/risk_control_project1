@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { ApiError, getErrorMessage } from '../../api/errors';
-import { composeTask, createTask } from '../../api/borrower';
+import { composeTask, createTask, listMyTasks, type BorrowerTaskItem } from '../../api/borrower';
+import { BANK_OPTIONS } from '../../components/annotate/types';
 import { Button } from '../../ui/Button';
 import { Field } from '../../ui/Field';
 import { Notice } from '../../ui/Notice';
@@ -17,11 +18,11 @@ function formatSize(bytes: number) {
 }
 
 function isPdf(file: File) {
-  return file.type === 'application/pdf' && /\.pdf$/i.test(file.name);
+  return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
 }
 
 function isImage(file: File) {
-  return ['image/jpeg', 'image/png'].includes(file.type) && /\.(jpe?g|png)$/i.test(file.name);
+  return ['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || /\.(jpe?g|png|webp)$/i.test(file.name);
 }
 
 function monthStart(month: string) {
@@ -40,26 +41,29 @@ function currentMonth() {
   return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
 }
 
-/**
- * 借款侧上传页。
- *
- * 与旧版的差别只有一处：错误文案与文件校验集中在这里，不再和银行侧共用一份拷贝。
- * 业务口径照旧——唯一必填是文件；期间可选；加密件要口令；多份流水各自成任务，
- * 多张同一份流水的照片按顺序合成一份材料。
- */
 export default function UploadPage() {
   const navigate = useNavigate();
   const [files, setFiles] = useState<File[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [recent, setRecent] = useState<BorrowerTaskItem[]>([]);
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
+  const [bankCode, setBankCode] = useState('');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [password, setPassword] = useState('');
   const [needPassword, setNeedPassword] = useState(false);
+  const [piplConsent, setPiplConsent] = useState(false);
+  const [showPrivacyNote, setShowPrivacyNote] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    listMyTasks(5)
+      .then((res) => setRecent(res.items || []))
+      .catch(() => {});
+  }, []);
 
   async function inspect(list: File[]) {
     setError('');
@@ -129,19 +133,27 @@ export default function UploadPage() {
           ? '开始月份不能晚于结束月份。'
           : '';
 
-  const canSubmit = Boolean(files.length && !submitting && !periodError && (!needPassword || password.trim()));
+  const canSubmit = Boolean(files.length && piplConsent && !submitting && !periodError && (!needPassword || password.trim()));
 
   async function submit() {
     if (!files.length) {
       setError('请先选择一份流水文件。');
       return;
     }
+    if (!piplConsent) {
+      setError('请先阅读并勾选个人金融信息处理单独同意条款。');
+      return;
+    }
     setSubmitting(true);
     setError('');
-    const fields = { password: password || undefined, period_start: monthStart(start), period_end: monthEnd(end) };
+    const fields = {
+      password: password || undefined,
+      period_start: monthStart(start),
+      period_end: monthEnd(end),
+      bank_code: bankCode || undefined,
+    };
 
     try {
-      // 多张图片 = 同一份流水的多页 → 合成一份材料
       if (files.length > 1 && files.every(isImage)) {
         const created = await composeTask(fields, files);
         navigate('/app/tasks/' + created.task_id, { replace: true });
@@ -154,7 +166,6 @@ export default function UploadPage() {
         return;
       }
 
-      // 多份流水：各自成任务，限流 2 路（服务端受理阶段仍是同步预读）
       setJobs(files.map((file, index) => ({ id: index, name: file.name, size: file.size, status: 'waiting' })));
       let cursor = 0;
       const worker = async () => {
@@ -187,7 +198,7 @@ export default function UploadPage() {
   return (
     <div className="panel" onPaste={onPaste}>
       <h1>上传个人银行流水</h1>
-      <p className="sub">只需提交流水文件，其他信息都可以不填。提交后由银行处理，本页不展示任何结论或指标。</p>
+      <p className="sub">优先提交从手机银行/网银直接导出的原版 PDF；多张同一份流水的照片可多选合并提交。本页不展示风险评估结果。</p>
 
       {error ? <Notice>{error}</Notice> : null}
       {warning ? <Notice tone="info">{warning}</Notice> : null}
@@ -233,7 +244,7 @@ export default function UploadPage() {
         onDrop={onDrop}
         onClick={() => input.current?.click()}
       >
-        <input ref={input} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" hidden onChange={onPick} />
+        <input ref={input} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" hidden onChange={onPick} />
         {files.length ? (
           <div className="file-list">
             <p className="file-ok">✓ 已选择 {files.length} 个文件</p>
@@ -259,16 +270,49 @@ export default function UploadPage() {
         ) : (
           <div>
             <p className="drop-title">点击选择，或把文件拖到这里</p>
-            <p className="muted small">支持 PDF / JPG / PNG，单个不超过 20MB；也可以直接 Ctrl+V 粘贴截图。</p>
+            <p className="muted small">支持 PDF / JPG / PNG（单个 ≤ 20MB），支持多张图片自动合并、Ctrl+V 直接粘贴截图。</p>
           </div>
         )}
       </div>
 
-      <div className="grid-2">
+      <div className="grid-3">
+        <label className="field">
+          <span>所属银行（可选，默认自动识别）</span>
+          <select value={bankCode} onChange={(e) => setBankCode(e.target.value)}>
+            <option value="">自动识别</option>
+            {BANK_OPTIONS.map((b) => (
+              <option key={b.code} value={b.code}>{b.label}</option>
+            ))}
+          </select>
+        </label>
         <Field label="流水起始月（可选）" type="month" value={start} onChange={(event) => setStart(event.target.value)} />
         <Field label="流水结束月（可选）" type="month" value={end} onChange={(event) => setEnd(event.target.value)} />
       </div>
       {periodError ? <Notice>{periodError}</Notice> : null}
+
+      <div className="consent-box">
+        <label className="consent-check">
+          <input type="checkbox" checked={piplConsent} onChange={(e) => setPiplConsent(e.target.checked)} />
+          <span>
+            我已阅读并<strong>单独同意</strong>授权银行处理本次提交的个人银行交易流水信息，用于信贷审核与真实性核验。
+          </span>
+        </label>
+        <button type="button" className="link-btn" onClick={() => setShowPrivacyNote((v) => !v)}>
+          {showPrivacyNote ? '收起声明全文' : '查看授权声明与保护说明'}
+        </button>
+        {showPrivacyNote && (
+          <div className="consent-detail">
+            根据《个人信息保护法》第二十九条关于处理敏感个人信息的规定：您所提交的银行流水账户信息与交易明细属于敏感个人信息，仅用于本次信贷风控审核与电子凭证核验，不会用于营销或向无关第三方提供；原始文件在平台内加密存储，仅经授权的审贷人员可查阅核验结论。
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <label className="inline-toggle small muted">
+          <input type="checkbox" checked={needPassword} onChange={(e) => setNeedPassword(e.target.checked)} />
+          PDF 文件设有打开口令（提前填写以免二次上传）
+        </label>
+      </div>
 
       {needPassword ? (
         <Field
@@ -276,15 +320,33 @@ export default function UploadPage() {
           type="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
-          hint="口令只用于本次解析，不会保存。"
+          hint="口令只用于本次现场解密提取，不会落盘保存。"
         />
       ) : null}
 
       <div className="actions">
         <Button block disabled={!canSubmit} onClick={() => void submit()}>
-          {submitting ? '提交中…' : '提交给银行'}
+          {submitting ? '提交中…' : '确认授权并提交给银行'}
         </Button>
       </div>
+
+      {recent.length > 0 && (
+        <div className="recent-box">
+          <div className="recent-head">
+            <span className="small muted">最近提交</span>
+            <Link className="link-btn" to="/app/tasks">查看全部记录 ›</Link>
+          </div>
+          <ul className="plain small">
+            {recent.map((r) => (
+              <li key={r.id}>
+                <Link to={'/app/tasks/' + r.id}>
+                  <span className="mono">{r.biz_no}</span> · {r.status === 'DONE' ? '已完成' : r.status === 'NEED_SUPPLEMENT' ? '需补传' : r.status === 'FAILED' ? '未完成' : '处理中'}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

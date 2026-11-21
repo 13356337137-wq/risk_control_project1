@@ -81,6 +81,16 @@ def group_lines(words_: list[Word], y_tol: float = 3.0) -> list[Line]:
     return lines
 
 
+def adaptive_group_lines(words_: list[Word]) -> list[Line]:
+    """按词高自适应行容差分组，兼容 PDF 文本层与 OCR 像素坐标。"""
+    if not words_:
+        return []
+    heights = sorted(max(0.0, word.bottom - word.top) for word in words_)
+    median_h = heights[len(heights) // 2]
+    tolerance = max(2.0, median_h * 0.6)
+    return group_lines(words_, y_tol=tolerance)
+
+
 def merge_tokens(line: Line, gap: float = 2.0) -> list[Word]:
     """把同一行里紧邻的词并成一个 token（PDF 常把一个表头词拆成多个 word）。"""
     tokens: list[Word] = []
@@ -98,12 +108,26 @@ def merge_tokens(line: Line, gap: float = 2.0) -> list[Word]:
     return tokens
 
 
+def _is_pdf_bytes(data: bytes) -> bool:
+    return b"%PDF-" in data[:1024]
+
+
+def _read_image_stub(data: bytes) -> list[PageWords]:
+    """图片输入没有 PDF 文本层：读出真实宽高，交给上层决定是否走 OCR。"""
+    pix = pymupdf.Pixmap(data)
+    return [PageWords(page_no=0, width=float(pix.width), height=float(pix.height),
+                      words=[], has_text=False)]
+
+
 def read_pages(data: bytes, password: str | None = None) -> list[PageWords]:
     """读 PDF 每页的词。没有文本层时 words 为空、has_text=False。
 
     加密件必须带口令：pymupdf 在没认证时读页会抛「No password given」，
     这个字符串会一路冒到界面上，用户看不懂，所以在入口就转成可读的错误。
     """
+    if not _is_pdf_bytes(data):
+        return _read_image_stub(data)
+
     pages: list[PageWords] = []
     doc = pymupdf.open(stream=data, filetype="pdf")
     if doc.needs_pass:
@@ -117,13 +141,22 @@ def read_pages(data: bytes, password: str | None = None) -> list[PageWords]:
         for page_no in range(doc.page_count):
             page = doc[page_no]
             rect = page.rect
+            matrix = page.rotation_matrix
             raw = page.get_text("words") or []
-            items = [
-                Word(text=str(r[4]).strip(), x0=float(r[0]), x1=float(r[2]),
-                     top=float(r[1]), bottom=float(r[3]))
-                for r in raw if str(r[4]).strip()
-            ]
-            pages.append(PageWords(page_no=page_no, width=rect.width, height=rect.height,
+            items: list[Word] = []
+            for r in raw:
+                text = str(r[4]).strip()
+                if not text:
+                    continue
+                # PyMuPDF 的 words 坐标按未旋转 MediaBox 给出，旋转页必须乘 rotation_matrix
+                # 才能与 page.rect 及前端画布坐标对齐。
+                box = pymupdf.Rect(float(r[0]), float(r[1]), float(r[2]), float(r[3])) * matrix
+                x0 = max(0.0, min(float(rect.width), float(box.x0)))
+                x1 = max(x0, min(float(rect.width), float(box.x1)))
+                top = max(0.0, min(float(rect.height), float(box.y0)))
+                bottom = max(top, min(float(rect.height), float(box.y1)))
+                items.append(Word(text=text, x0=x0, x1=x1, top=top, bottom=bottom))
+            pages.append(PageWords(page_no=page_no, width=float(rect.width), height=float(rect.height),
                                    words=items, has_text=bool(items)))
     finally:
         doc.close()
