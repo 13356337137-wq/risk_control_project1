@@ -304,7 +304,13 @@ export type TemplateLayoutBox = { field: string; column: string; page: number; x
 export type TemplateLayout = {
   template_id: number;
   has_sample: boolean;
-  layout: { pages?: Record<string, { width: number; height: number }>; page_count?: number; boxes?: TemplateLayoutBox[] } | null;
+  layout: {
+    pages?: Record<string, { width: number; height: number }>;
+    page_count?: number;
+    boxes?: TemplateLayoutBox[];
+    /** 模板的真实页面尺寸（pt）：旧版 boxes 回看时用它换算，别再硬退 595×842 */
+    page_size?: { w?: number; h?: number };
+  } | null;
   field_map: Record<string, unknown> | null;
   header_columns: string[] | null;
 };
@@ -476,9 +482,18 @@ export type ThresholdDef = {
   calibrated: boolean;
 };
 
+export type ThresholdHistoryItem = {
+  version: number;
+  note?: string | null;
+  created_at?: string | null;
+  related_metrics?: string[];
+};
+
 export type ThresholdPayload = {
   version: number;
   values: Record<string, string | number | null>;
+  defaults?: Record<string, string | number | null>;
+  history?: ThresholdHistoryItem[];
   defs: ThresholdDef[];
 };
 
@@ -491,6 +506,34 @@ export function saveThresholds(
   note?: string,
 ): Promise<{ version: number; saved_version: number; values: Record<string, string | number | null> }> {
   return request('/thresholds', { method: 'PUT', body: { values, note } });
+}
+
+export function resetThresholds(): Promise<{ saved_version: number; values: Record<string, string | number | null> }> {
+  return request('/thresholds/reset', { method: 'POST' });
+}
+
+export type CustomMetricItem = {
+  id: number;
+  code: string;
+  name: string;
+  unit?: string;
+  formula?: string;
+  group?: string;
+  steps?: unknown[];
+};
+
+export function listCustomMetrics(): Promise<{ items: CustomMetricItem[] }> {
+  return request('/custom-metrics');
+}
+
+export function createCustomMetric(body: {
+  code: string; name: string; unit?: string; formula?: string; group?: string;
+}): Promise<CustomMetricItem> {
+  return request('/custom-metrics', { method: 'POST', body });
+}
+
+export function deleteCustomMetric(id: number): Promise<{ deleted: boolean }> {
+  return request('/custom-metrics/' + id, { method: 'DELETE' });
 }
 
 export type EntityAccount = {

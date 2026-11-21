@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from collections import defaultdict, deque
 from datetime import datetime
+import time
 
 from db.models import AuditLog, User
 from db.session import get_session
@@ -76,13 +78,32 @@ def register(payload: RegisterIn, db: Session = Depends(get_session)):
     return {"token": issue_token(user), "user": _public(user)}
 
 
+# 登录失败滑动窗口限流：同一账号 5 分钟内连续失败 5 次即锁定，防暴力破解
+_LOGIN_FAILS: dict[str, deque[float]] = defaultdict(deque)
+_LOGIN_WINDOW_SEC = 300.0
+_LOGIN_MAX_FAILS = 5
+
+
+def _check_login_rate(key: str) -> None:
+    now_ts = time.time()
+    q = _LOGIN_FAILS[key]
+    while q and now_ts - q[0] > _LOGIN_WINDOW_SEC:
+        q.popleft()
+    if len(q) >= _LOGIN_MAX_FAILS:
+        raise HTTPException(429, detail={"code": "E_LIMIT", "message": "登录失败次数过多，请 5 分钟后再试"})
+
+
 @router.post("/login")
 def login(payload: LoginIn, db: Session = Depends(get_session)):
-    user = db.execute(select(User).where(User.username == payload.username.strip())).scalars().first()
+    uname = payload.username.strip()
+    _check_login_rate(uname)
+    user = db.execute(select(User).where(User.username == uname)).scalars().first()
     if user is None or not verify_password(payload.password, user.password_hash):
+        _LOGIN_FAILS[uname].append(time.time())
         raise HTTPException(401, detail={"code": "E_AUTH", "message": "用户名或密码不正确"})
     if user.status != "active":
         raise HTTPException(403, detail={"code": "E_FORBIDDEN", "message": "账号已停用"})
+    _LOGIN_FAILS.pop(uname, None)
     user.last_login_at = datetime.utcnow()
     db.commit()
     return {"token": issue_token(user), "user": _public(user)}
@@ -121,21 +142,24 @@ def delete_user(user_id: int, db: Session = Depends(get_session),
         raise HTTPException(400, detail={"code": "E_SELF", "message": "不能停用自己的账号"})
     if target.role == "banker" and target.is_admin:
         others = db.execute(
-            select(User).where(User.role == "banker", User.is_admin.is_(True), User.id != user_id)
+            select(User).where(
+                User.role == "banker", User.is_admin.is_(True),
+                User.status == "active", User.id != user_id,
+            )
         ).scalars().all()
         if not others:
             raise HTTPException(400, detail={
                 "code": "E_LAST_ADMIN", "message": "这是最后一个管理员，停用后将无人能管理系统"})
     target.status = "disabled"
     target.last_login_at = target.last_login_at
-    db.add(AuditLog(action="disable_user", object_type="user", object_id=user_id,
+    db.add(AuditLog(actor_id=admin.id, action="disable_user", object_type="user", object_id=user_id,
                     detail=f"停用账号 {target.username}"))
     db.commit()
     return {"id": user_id, "status": "disabled"}
 
 
 @router.get("/users")
-def list_users(user: User = Depends(require_banker), db: Session = Depends(get_session)):
+def list_users(user: User = Depends(require_admin), db: Session = Depends(get_session)):
     rows = db.execute(select(User).order_by(User.id)).scalars().all()
     return {"items": [_public(r) for r in rows]}
 

@@ -73,26 +73,33 @@ export default function OcrRoutingPage() {
         disabled={!isAdmin}
         onChange={(event) => setConfig({ ...config, workers: Number(event.target.value) })}
       />
-      <Field
-        label="模型"
-        value={config.model}
-        disabled={!isAdmin}
-        onChange={(event) => setConfig({ ...config, model: event.target.value })}
-      />
-      <Field
-        label="接口地址"
-        value={config.endpoint}
-        disabled={!isAdmin}
-        onChange={(event) => setConfig({ ...config, endpoint: event.target.value })}
-      />
-      <Field
-        label={config.has_api_key ? 'API Key（已配置，留空表示不改）' : 'API Key（未配置）'}
-        type="password"
-        value={apiKey}
-        disabled={!isAdmin}
-        onChange={(event) => setApiKey(event.target.value)}
-        hint="Key 不会回显；留空保存表示沿用原值。"
-      />
+      <p className="small muted" style={{ marginTop: 8 }}>
+        凭据状态：{config.credential_ready ? '已就绪（可开启云端路由）' : '未就绪（请填写 API Key 后保存）'}
+      </p>
+      {config.enabled ? (
+        <>
+          <Field
+            label="模型"
+            value={config.model ?? ''}
+            disabled={!isAdmin}
+            onChange={(event) => setConfig({ ...config, model: event.target.value })}
+          />
+          <Field
+            label="接口地址"
+            value={config.endpoint ?? ''}
+            disabled={!isAdmin}
+            onChange={(event) => setConfig({ ...config, endpoint: event.target.value })}
+          />
+          <Field
+            label={config.has_api_key ? 'API Key（已配置，留空表示不改）' : 'API Key（未配置）'}
+            type="password"
+            value={apiKey}
+            disabled={!isAdmin}
+            onChange={(event) => setApiKey(event.target.value)}
+            hint="Key 加密落库且不会回显；留空保存表示沿用原值。"
+          />
+        </>
+      ) : null}
     </div>
   );
 }

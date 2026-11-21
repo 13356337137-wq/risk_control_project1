@@ -1,11 +1,14 @@
 """报告与指标查询。"""
 from __future__ import annotations
 
+from datetime import datetime
+import html as _html
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import MetricValue, Report, Task, Txn, User
+from db.models import AuditLog, MetricValue, Report, Task, Txn, User
 from db.session import get_session
 from helpers.security import current_user, require_banker
 
@@ -22,9 +25,11 @@ from algorithm.algo.verification_defs import verification_definitions  # noqa: E
 router = APIRouter(tags=["reports"])
 
 
-def _check_task(db: Session, task_id: int, user: User) -> Task:
+def _check_task(db: Session, task_id: int, user: User, *, allow_trashed_for_banker: bool = False) -> Task:
     task = db.get(Task, task_id)
-    if task is None or task.deleted_at is not None:
+    if task is None:
+        raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "任务不存在"})
+    if task.deleted_at is not None and not (allow_trashed_for_banker and user.role == "banker"):
         raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "任务不存在"})
     if user.role != "banker" and task.user_id != user.id:
         raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "任务不存在"})
@@ -33,14 +38,63 @@ def _check_task(db: Session, task_id: int, user: User) -> Task:
 
 @router.get("/reports/{task_id}", dependencies=[Depends(require_banker)])
 def get_report(task_id: int, db: Session = Depends(get_session), user: User = Depends(current_user)):
-    _check_task(db, task_id, user)
+    task = _check_task(db, task_id, user, allow_trashed_for_banker=True)
     rep = db.execute(select(Report).where(Report.task_id == task_id).order_by(Report.version.desc())).scalars().first()
     if rep is None:
         raise HTTPException(404, "报告不存在")
     payload = dict(rep.payload or {})
-    # 快慢双通道：把复核状态挂在报告顶层（不改动其余字段）
     payload["verification"] = rep.verification or {"status": "pending"}
+    payload["in_trash"] = task.deleted_at is not None
     return payload
+
+
+@router.post("/reports/{task_id}/export", dependencies=[Depends(require_banker)])
+def export_report_printable(task_id: int, db: Session = Depends(get_session), user: User = Depends(current_user)):
+    """导出带操作人+时间水印的可打印结论版报告（HTML，支持浏览器直接存为 PDF），并写审计日志。"""
+    task = _check_task(db, task_id, user, allow_trashed_for_banker=True)
+    rep = db.execute(select(Report).where(Report.task_id == task_id).order_by(Report.version.desc())).scalars().first()
+    if rep is None:
+        raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "报告不存在"})
+    payload = dict(rep.payload or {})
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    wm = _html.escape(f"{user.display_name or user.username} · {ts} · {task.biz_no}")
+    verdict = _html.escape(str(payload.get("verdict") or "—"))
+    reason = _html.escape(str(payload.get("verdict_reason") or ""))
+    trust_score = _html.escape(str(((payload.get("trust") or {}).get("score")) or "—"))
+    overall = _html.escape(str(((payload.get("scores") or {}).get("overall")) or "—"))
+    rows_html = "".join(
+        f"<tr><td>{_html.escape(str(m.get('code', '')))}</td>"
+        f"<td>{_html.escape(str(m.get('name', '')))}</td>"
+        f"<td>{_html.escape(str(m.get('value') if m.get('value') is not None else '不可算'))}</td>"
+        f"<td>{_html.escape(str(m.get('unit', '')))}</td></tr>"
+        for m in (payload.get("metrics") or [])
+    )
+    html_doc = (
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        f"<title>风控报告-{_html.escape(task.biz_no)}</title>"
+        "<style>body{font-family:sans-serif;padding:28px;color:#111;}"
+        ".wm{position:fixed;top:40%;left:15%;font-size:28px;color:rgba(0,0,0,.07);transform:rotate(-25deg);pointer-events:none;}"
+        "table{width:100%;border-collapse:collapse;margin-top:16px;}th,td{border:1px solid #ddd;padding:6px 8px;font-size:13px;}"
+        "</style></head><body>"
+        f"<div class=\"wm\">{wm}</div>"
+        f"<h1>银行流水核验与分析报告（{_html.escape(task.biz_no)}）</h1>"
+        f"<p><strong>结论：</strong>{verdict} &nbsp;|&nbsp; <strong>真实性得分：</strong>{trust_score} &nbsp;|&nbsp; <strong>综合评分：</strong>{overall}</p>"
+        f"<p>{reason}</p>"
+        "<table><thead><tr><th>代号</th><th>指标</th><th>值</th><th>单位</th></tr></thead>"
+        f"<tbody>{rows_html}</tbody></table>"
+        f"<p style=\"margin-top:20px;color:#666;font-size:12px;\">导出水印：{wm}</p>"
+        "</body></html>"
+    )
+    db.add(AuditLog(
+        actor_id=user.id, action="report.export", object_type="report", object_id=rep.id,
+        detail=f"format=printable_html; task_id={task.id}",
+    ))
+    db.commit()
+    return Response(
+        content=html_doc.encode("utf-8"),
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={task.biz_no}-report.html"},
+    )
 
 
 @router.get("/tasks/{task_id}/transactions", dependencies=[Depends(require_banker)])

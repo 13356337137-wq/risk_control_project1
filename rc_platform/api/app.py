@@ -198,13 +198,33 @@ def compute_features(request: ComputeRequest):
 
 
 @router.post("/api/v1/features/compute-file")
-async def compute_features_from_file(file: UploadFile, codes: str | None = Form(None)):
-    """上传一份流水（PDF）直接算特征：解析 + 计算一次完成。"""
+async def compute_features_from_file(
+    file: UploadFile,
+    codes: str | None = Form(None),
+    password: str | None = Form(None),
+):
+    """上传一份流水（PDF）直接算特征：解析 + 计算一次完成（支持加密 PDF 口令）。"""
     from rc_platform.capabilities.features.defs import compute
 
     data = await file.read()
     if not data:
         raise HTTPException(400, detail={"code": "E_PARAM", "message": "文件为空"})
+    if data[:4] == b"%PDF":
+        try:
+            import pymupdf as _fitz  # noqa: PLC0415
+
+            doc = _fitz.open(stream=data, filetype="pdf")
+            try:
+                if doc.needs_pass:
+                    if not password or doc.authenticate(password) <= 0:
+                        raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": "PDF 受口令保护，请提供正确口令"})
+                    data = doc.tobytes(encryption=_fitz.PDF_ENCRYPT_NONE)
+            finally:
+                doc.close()
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001
+            pass
     statement = _statement_from_bytes(data, file.filename or "upload.pdf")
     defs = _feature_defs()
     if codes:

@@ -187,8 +187,13 @@ def render_page_png(pdf_bytes: bytes, layout: dict, page_no: int, dpi: int = 140
                 field_name = col.get("field") or ",".join(col.get("fields") or [])
                 _draw_label(page, col_rect.x0 + 2, max(12.0, col_rect.y0 + 10), str(field_name), color)
 
+        mb_one_based = (
+            layout.get("page_base") == 1
+            or (bool(meta_boxes) and not tables and min(int(m.get("page", 0)) for m in meta_boxes) >= 1)
+        )
         for index, mb in enumerate(meta_boxes):
-            if int(mb.get("page", 0)) != page_no:
+            mb_page = int(mb.get("page", 0)) - (1 if mb_one_based else 0)
+            if mb_page != page_no:
                 continue
             drew_modern = True
             mx = float(mb.get("x", 0)) * W

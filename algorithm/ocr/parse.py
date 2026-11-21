@@ -463,6 +463,10 @@ def _fill_header_from_boxes(
             value = _clean_name(text)
             if value and len(value) >= 2:
                 header.account_type = HeaderField(value=value, bbox=bbox, confidence=confidence)
+        elif box.field == "currency" and hasattr(header, "currency") and getattr(header, "currency", None) is None:
+            value = _clean_name(text)
+            if value:
+                setattr(header, "currency", HeaderField(value=value, bbox=bbox, confidence=confidence))
         elif box.field == "period" and header.period_start is None:
             match = PERIOD_RE.search(compact)
             if not match:

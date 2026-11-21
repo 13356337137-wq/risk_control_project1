@@ -72,7 +72,7 @@ export default function DashboardPage() {
                 <td style={{ width: 160 }}>{item.verdict}</td>
                 <td>
                   <span className="bar-inline">
-                    <Bar value={item.count} max={maxVerdict} tone={item.verdict.includes('不一致') || item.verdict.includes('可疑') ? 'bad' : item.verdict.includes('未') ? 'muted' : 'brand'} />
+                    <Bar value={item.count} max={maxVerdict} tone={item.verdict === '未发现异常' || item.verdict.includes('通过') ? 'brand' : item.verdict.includes('不一致') || item.verdict.includes('可疑') || item.verdict.includes('不通过') ? 'bad' : 'muted'} />
                     <span>{item.count} 份</span>
                   </span>
                 </td>
@@ -150,7 +150,7 @@ export default function DashboardPage() {
             {data.recent.map((item) => (
               <tr key={item.task_id}>
                 <td><Link className="link-btn" to={'/bank/report/' + item.task_id}>{item.biz_no}</Link></td>
-                <td className="small">{item.status}</td>
+                <td className="small">{{ DONE: '已完成', FAILED: '失败', QUEUED: '排队中', PARSING: '解析中', CHECKING: '预检中', VERIFYING: '核验中', REPORTING: '生成中', NEED_SUPPLEMENT: '待补传' }[item.status] ?? item.status}</td>
                 <td className="small">{item.verdict ?? '—'}</td>
                 <td className="small">{item.overall ?? '—'}</td>
                 <td className="small muted">{item.txn_count}</td>

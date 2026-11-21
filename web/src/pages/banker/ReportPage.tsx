@@ -132,6 +132,7 @@ export default function ReportPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [tab, setTab] = useState<Tab>('summary');
+  const [viewMode, setViewMode] = useState<'brief' | 'detail'>('detail');
   const [txns, setTxns] = useState<TxnRow[] | null>(null);
   const [txnPage, setTxnPage] = useState(0);
   const [keyword, setKeyword] = useState('');
@@ -298,6 +299,10 @@ export default function ReportPage() {
   const hasTemplateMismatch = (report.limitations ?? []).some((l) =>
     /模板缺列|解析不完整|模板|临时标注/.test(l),
   );
+  const vetoChecks = layers.flatMap((l) =>
+    (l.checks ?? []).filter((c) => ['C1', 'C2', 'C3'].includes(String(c.code || '')) && (c.status === 'fail' || c.status === 'inconsistent')),
+  );
+  const inTrash = Boolean((report as unknown as { in_trash?: boolean }).in_trash);
 
   return (
     <div className="panel wide">
@@ -332,8 +337,23 @@ export default function ReportPage() {
               导出明细 CSV
             </Button>
           )}
-          <Button size="sm" variant="ghost" onClick={() => window.print()}>
-            打印摘要
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setViewMode((m) => (m === 'brief' ? 'detail' : 'brief'))}
+          >
+            {viewMode === 'brief' ? '切换明细版' : '切换结论版'}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setViewMode('brief');
+              setTab('summary');
+              window.setTimeout(() => window.print(), 80);
+            }}
+          >
+            打印 / 存 PDF
           </Button>
           <Link className="btn btn-ghost" to="/bank/tasks">回到列表</Link>
         </div>
@@ -342,6 +362,17 @@ export default function ReportPage() {
       {error && <Notice>{error}</Notice>}
       {notice && <Notice tone="ok">{notice}</Notice>}
 
+      {inTrash && (
+        <div className="alert warn no-print">
+          当前任务位于回收站中（仅供复核查阅）；如需恢复请前往任务回收站操作。
+        </div>
+      )}
+      {vetoChecks.length > 0 && (
+        <div className="alert err" style={{ borderLeft: '4px solid #c0392b', background: '#fdf2f2', padding: '10px 14px', marginBottom: 12 }}>
+          <strong>一票否决警示：</strong>关键核验项（{vetoChecks.map((c) => c.code).join('、')}）未通过，
+          请重点核查余额链/页合计/笔数一致性后再作授信决策。
+        </div>
+      )}
       {hasTemplateMismatch && (
         <div className="alert warn no-print">
           检测到该任务存在「解析不完整 / 模板缺列 / 版式未命中」提示，建议点击右侧按钮在画布中直接修正框选并重解析：
@@ -388,6 +419,7 @@ export default function ReportPage() {
         <div className="score"><span className="score-value">{report.materials?.length ?? 0}</span><span className="muted small">提交材料</span></div>
       </div>
 
+      {viewMode === 'detail' && (
       <div className="tabs small-tabs report-tabs no-print">
         {TABS.map((item) => (
           <button key={item.key} className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)}>
@@ -395,6 +427,7 @@ export default function ReportPage() {
           </button>
         ))}
       </div>
+      )}
 
       {tab === 'summary' ? (
         <>

@@ -286,7 +286,14 @@ export function CanvasStage({
           : '';
 
   return (
-    <PdfPageCanvas
+    <div style={{ width: '100%' }}>
+      <div className="ann-legend" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, padding: '6px 10px', fontSize: 12, color: '#4b5563', borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
+        <span><i style={{ display: 'inline-block', width: 10, height: 10, border: '2px dashed #7c3aed', marginRight: 4, verticalAlign: 'middle' }} />紫色虚线：表格区</span>
+        <span><i style={{ display: 'inline-block', width: 10, height: 2, background: '#d97706', marginRight: 4, verticalAlign: 'middle' }} />琥珀横线：表头基准线（线上不计交易）</span>
+        <span><i style={{ display: 'inline-block', width: 10, height: 10, background: '#2563eb22', border: '1.5px solid #2563eb', marginRight: 4, verticalAlign: 'middle' }} />彩色竖框：交易列带</span>
+        <span><i style={{ display: 'inline-block', width: 10, height: 10, border: '1.5px dashed #0f766e', marginRight: 4, verticalAlign: 'middle' }} />青色虚框：页眉单值字段</span>
+      </div>
+      <PdfPageCanvas
       fileBytes={fileBytes}
       mimeHint={mimeHint}
       pageIndex={pageIndex}
@@ -404,7 +411,7 @@ export function CanvasStage({
                 const areaBottom = reg.area.y + reg.area.h;
                 const colTop = reg.headerY > reg.area.y && reg.headerY < areaBottom - 0.01 ? reg.headerY : reg.area.y;
                 const colHeight = Math.max(0.02, areaBottom - colTop);
-                // 显示宽度按「实际读到的格子」包络：模板/预读给的宽度常常只覆盖表头词
+                // 显示宽度取「列宽 ∪ 实际读到格子的包络」：模板/预读给的宽度常常只覆盖表头词
                 // （「交易时间」4 个字），而值是「2026-10-01」更长——不扩就会看着框偏左。
                 // 只影响显示，保存的仍是 col.x / col.w。
                 const cellsX = (col.cellNorms ?? []).flatMap((c) => [c.x0, c.x1]);
@@ -433,7 +440,7 @@ export function CanvasStage({
                       className={`ann-col-box ${isSel ? 'selected' : ''} ${dimmed ? 'dim' : ''}`}
                       style={{
                         // 框向外扩 2px：边框直接压在被框的字上时，首尾字符会被盖掉半个，
-                        // 看起来像「框圈歪了」。外扩之后框住的范围不变，但不再遮挡内容。
+                        // 看起来像「框圈歪了」。外扩后框住范围不变，但不再遮挡内容。
                         left: `calc(${displayX * 100}% - 2px)`,
                         top: `calc(${colTop * 100}% - 2px)`,
                         width: `calc(${displayW * 100}% + 4px)`,
@@ -607,6 +614,7 @@ export function CanvasStage({
           )}
         </div>
       )}
-    </PdfPageCanvas>
+      </PdfPageCanvas>
+    </div>
   );
 }

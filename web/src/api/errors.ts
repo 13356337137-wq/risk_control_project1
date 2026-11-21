@@ -16,7 +16,7 @@ const MESSAGES: Record<Audience, Record<ApiErrorCode, string>> = {
   borrower: {
     E_FORMAT: '文件格式不支持，请上传 PDF',
     E_BROKEN: '文件不完整，请重新下载',
-    E_ENCRYPT: '文件已加密，请去掉口令',
+    E_ENCRYPT: '文件设有打开口令，请填写口令后提交',
     E_NOLAYER: '该文件像截图或扫描件',
     E_MULTI: '一次只能传一家银行',
     E_CHECK: '明细与合计对不上，请核对原件',

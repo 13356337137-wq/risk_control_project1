@@ -531,6 +531,11 @@ def transactions_export(task_id: int, db: Session = Depends(get_session),
         writer.writerow([task.biz_no, row.txn_date, "收入" if row.direction == "in" else "支出" if row.direction == "out" else "",
                          "" if row.amount is None else row.amount, "" if row.balance is None else row.balance,
                          row.summary or "", row.counterparty_name or "", row.page_no or ""])
+    db.add(AuditLog(
+        actor_id=user.id, action="report.export", object_type="task", object_id=task.id,
+        detail=f"format=csv; rows={len(rows)}",
+    ))
+    db.commit()
     body = "\ufeff" + buffer.getvalue()
     filename = f"{task.biz_no}.csv"
     return Response(
@@ -541,9 +546,10 @@ def transactions_export(task_id: int, db: Session = Depends(get_session),
 
 
 @router.get("/{task_id}/export.json", dependencies=[Depends(require_banker)])
-def report_export(task_id: int, db: Session = Depends(get_session),
+def report_export(task_id: int, include_transactions: bool = False,
+                  db: Session = Depends(get_session),
                   user: User = Depends(current_user)):
-    # 报告导出：只导平台算出的结论（评分/指标/结论/证据），不含原始流水
+    # 报告导出：默认只导平台结论；管理员显式传 include_transactions=true 时附带明细，并写审计
     task = db.get(Task, task_id)
     if task is None or task.deleted_at is not None:
         raise HTTPException(404, detail={"code": "E_NOT_FOUND", "message": "流水不存在或已删除"})
@@ -553,14 +559,28 @@ def report_export(task_id: int, db: Session = Depends(get_session),
     ).scalars().first()
     if report_row is None:
         raise HTTPException(404, detail={"code": "E_STATE", "message": "该流水还没有报告"})
-    # 不查原始逐笔：导出物只应有平台得出的结论
+    txns_out: list[dict] = []
+    if include_transactions and getattr(user, "is_admin", False):
+        rows = db.execute(select(Txn).where(Txn.task_id == task_id).order_by(Txn.txn_date, Txn.id)).scalars().all()
+        txns_out = [
+            {"txn_date": r.txn_date, "direction": r.direction,
+             "amount": None if r.amount is None else str(r.amount),
+             "balance": None if r.balance is None else str(r.balance),
+             "summary": r.summary, "counterparty_name": r.counterparty_name, "page_no": r.page_no}
+            for r in rows
+        ]
+    db.add(AuditLog(
+        actor_id=user.id, action="report.export", object_type="task", object_id=task.id,
+        detail=f"format=json; include_txns={bool(txns_out)}",
+    ))
+    db.commit()
     payload = {
         "biz_no": task.biz_no,
         "status": task.status,
         "carrier": task.carrier,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "report": report_row.payload,
-        "transactions": [],
+        "transactions": txns_out,
     }
     filename = f"{task.biz_no}.json"
     return Response(
@@ -583,7 +603,7 @@ def recycle_tasks(payload: TaskIdsPayload, db: Session = Depends(get_session),
         if row.deleted_at is None:
             row.deleted_at = now
             moved += 1
-    db.add(AuditLog(action="recycle_tasks", object_type="task", object_id=rows[0].id,
+    db.add(AuditLog(actor_id=user.id, action="recycle_tasks", object_type="task", object_id=rows[0].id,
                     detail=f"ids={_ids_brief([r.id for r in rows])}; moved={moved}"))
     db.commit()
     return {"moved": moved, "ids": sorted(r.id for r in rows)}
@@ -601,7 +621,7 @@ def restore_tasks(payload: TaskIdsPayload, db: Session = Depends(get_session),
         if row.deleted_at is not None:
             row.deleted_at = None
             restored += 1
-    db.add(AuditLog(action="restore_tasks", object_type="task", object_id=rows[0].id,
+    db.add(AuditLog(actor_id=user.id, action="restore_tasks", object_type="task", object_id=rows[0].id,
                     detail=f"ids={_ids_brief([r.id for r in rows])}; restored={restored}"))
     db.commit()
     return {"restored": restored, "ids": sorted(r.id for r in rows)}
@@ -621,8 +641,13 @@ def purge_tasks(payload: TaskIdsPayload, db: Session = Depends(get_session),
         raise HTTPException(409, detail={"code": "E_STATE",
                                          "message": f"这些流水还在用，请先移入回收站：{[r.id for r in live]}"})
     ids = [r.id for r in rows]
+    candidate_file_ids: set[int] = set()
     purged = 0
     for task in rows:
+        if task.file_id:
+            candidate_file_ids.add(task.file_id)
+        for tf in db.query(TaskFile).filter(TaskFile.task_id == task.id).all():
+            candidate_file_ids.add(tf.file_id)
         db.query(Txn).filter(Txn.task_id == task.id).delete()
         db.query(MetricValue).filter(MetricValue.task_id == task.id).delete()
         db.query(Report).filter(Report.task_id == task.id).delete()
@@ -630,10 +655,30 @@ def purge_tasks(payload: TaskIdsPayload, db: Session = Depends(get_session),
         db.query(BankAccount).filter(BankAccount.task_id == task.id).delete()
         db.delete(task)
         purged += 1
-    db.add(AuditLog(action="purge_tasks", object_type="task", object_id=ids[0],
-                    detail=f"ids={_ids_brief(ids)}; purged={purged}"))
+    db.flush()
+    # 清理不再被任何任务或模板引用的孤儿 FileObj 及磁盘原件，避免敏感原件残留
+    files_deleted = 0
+    from db.models import Template as _Tpl  # noqa: PLC0415
+    for fid in candidate_file_ids:
+        still_used = (
+            db.query(Task).filter(Task.file_id == fid).first() is not None
+            or db.query(TaskFile).filter(TaskFile.file_id == fid).first() is not None
+            or db.query(_Tpl).filter(_Tpl.sample_file_id == fid).first() is not None
+        )
+        if not still_used:
+            fobj = db.get(FileObj, fid)
+            if fobj is not None:
+                if fobj.storage_path:
+                    try:
+                        Path(fobj.storage_path).unlink(missing_ok=True)
+                    except Exception:  # noqa: BLE001
+                        pass
+                db.delete(fobj)
+                files_deleted += 1
+    db.add(AuditLog(actor_id=user.id, action="purge_tasks", object_type="task", object_id=ids[0],
+                    detail=f"ids={_ids_brief(ids)}; purged={purged}; files_deleted={files_deleted}"))
     db.commit()
-    return {"purged": purged, "ids": sorted(ids)}
+    return {"purged": purged, "files_deleted": files_deleted, "ids": sorted(ids)}
 
 
 @router.post("/{task_id}/verify", dependencies=[Depends(require_banker)])
@@ -669,6 +714,10 @@ def reanalyze_task(
     if not path.exists():
         raise HTTPException(400, detail={"code": "E_STATE", "message": "原文件已被清理，无法重算"})
     data = path.read_bytes()
+    # 加密件当场校验口令，避免错口令/缺口令进入队列产生失败任务
+    if data[:4] == b"%PDF" and is_password_protected(data):
+        if not password or not password_opens(data, password):
+            raise HTTPException(400, detail={"code": "E_ENCRYPT", "message": "文件受口令保护，请提供正确的打开口令"})
 
     from db.models import Template
     chosen_id = template_id if template_id is not None else task.template_id
@@ -769,6 +818,7 @@ def reparse_task(
     layout: str | None = Form(None, description="画布框选 layout JSON，只对这一次重解析生效"),
     field_map: str | None = Form(None, description="字段映射 JSON，配合 layout 使用"),
     bank_code: str | None = Form(None),
+    password: str | None = Form(None, description="加密 PDF 打开口令"),
     db: Session = Depends(get_session),
     user: User = Depends(current_user),
 ):
@@ -821,10 +871,10 @@ def reparse_task(
 
     task.field_map_override = override_json
     task.check_result = {**(task.check_result or {}), "reparse": reparse_meta}
-    db.add(AuditLog(action="reparse_task", object_type="task", object_id=task.id, detail=detail_desc))
+    db.add(AuditLog(actor_id=user.id, action="reparse_task", object_type="task", object_id=task.id, detail=detail_desc))
     db.commit()
 
-    mode = worker.submit_task(task.id)
+    mode = worker.submit_task(task.id, password=password)
     return {"task_id": task.id, "status": task.status, "mode": mode}
 
 
@@ -917,7 +967,7 @@ def add_supplement(
     db.add(TaskFile(task_id=task.id, file_id=file_obj.id, role="supplement", seq=int(max_seq) + 1))
     transition(task, "QUEUED")
     db.add(AuditLog(
-        action="add_supplement", object_type="task", object_id=task.id,
+        actor_id=user.id, action="add_supplement", object_type="task", object_id=task.id,
         detail=f"file={_safe_file_name(file.filename)}; file_id={file_obj.id}",
     ))
     db.commit()

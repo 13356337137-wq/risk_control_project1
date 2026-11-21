@@ -332,12 +332,7 @@ export function StepSidebar({
                       value={col.field}
                       onChange={(e) => onUpdateColumn(col.id, { field: e.target.value })}
                     >
-                      {/* 当前字段不在候选表里时也要原样列出：否则 select 会显示成第一项，
-                          看着像「对方户名」被改成了「交易日期」 */}
-                      {(fieldOptions.some((opt) => opt.key === col.field)
-                        ? fieldOptions
-                        : [{ key: col.field, label: fieldLabel(col.field, customFields) }, ...fieldOptions]
-                      ).map((opt) => (
+                      {fieldOptions.map((opt) => (
                         <option key={opt.key} value={opt.key}>
                           {opt.label}
                         </option>
@@ -365,6 +360,11 @@ export function StepSidebar({
                       ×
                     </button>
                   </div>
+                  {!isExp && col.cells.length > 0 && (
+                    <div className="small muted" style={{ fontSize: 11, marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      样例：{col.cells.slice(0, 3).map((c) => c.text).join(' · ')}
+                    </div>
+                  )}
                   {isExp && (
                     <div className="ann-col-preview">
                       <div>
@@ -419,6 +419,27 @@ export function StepSidebar({
                   <span className="ann-single-val" title={s.value}>
                     {s.value || '（手动框区域）'}
                   </span>
+                  {isSel && (
+                    <div className="small muted" style={{ display: 'flex', gap: 4, marginTop: 4, width: '100%', flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
+                      {(['x', 'y', 'w', 'h'] as const).map((k) => (
+                        <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 11 }}>
+                          {k.toUpperCase()}%
+                          <input
+                            type="number"
+                            step="0.5"
+                            min="0"
+                            max="100"
+                            style={{ width: 52, padding: '1px 3px', fontSize: 11 }}
+                            value={Number((s[k] * 100).toFixed(1))}
+                            onChange={(e) => {
+                              const v = Math.max(0, Math.min(1, Number(e.target.value) / 100));
+                              if (Number.isFinite(v)) onUpdateSingle(s.id, { [k]: v });
+                            }}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  )}
                   <button
                     type="button"
                     className="ann-mini-btn danger"

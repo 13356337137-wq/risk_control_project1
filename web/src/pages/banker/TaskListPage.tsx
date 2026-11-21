@@ -128,11 +128,16 @@ export default function TaskListPage() {
     }
   }
 
+  const [pendingConfirm, setPendingConfirm] = useState<{ action: 'recycle' | 'purge'; ids: number[] } | null>(null);
+
+  function requestConfirm(action: 'recycle' | 'purge', ids: number[]) {
+    if (!ids.length) return;
+    setPendingConfirm({ action, ids });
+  }
+
   async function runBatch(action: 'recycle' | 'restore' | 'purge', ids: number[]) {
     if (!ids.length) return;
-    if (action === 'purge' && !window.confirm(`确定彻底删除选中的 ${ids.length} 条任务及其所有流水、报告与材料关联吗？此操作不可恢复。`)) {
-      return;
-    }
+    setPendingConfirm(null);
     setBatchBusy(true);
     setError('');
     setNotice('');
@@ -258,12 +263,12 @@ export default function TaskListPage() {
                 <Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => void runBatch('restore', selectedIds)}>
                   批量恢复
                 </Button>
-                <Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => void runBatch('purge', selectedIds)}>
+                <Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => requestConfirm('purge', selectedIds)}>
                   彻底删除
                 </Button>
               </>
             ) : (
-              <Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => void runBatch('recycle', selectedIds)}>
+              <Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => requestConfirm('recycle', selectedIds)}>
                 移入回收站
               </Button>
             )}
@@ -271,6 +276,19 @@ export default function TaskListPage() {
         )}
       </div>
 
+      {pendingConfirm ? (
+        <div className="alert warn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <span>
+            {pendingConfirm.action === 'purge'
+              ? `确定彻底删除选中的 ${pendingConfirm.ids.length} 条任务及其流水、报告与原件？此操作不可恢复。`
+              : `确定将选中的 ${pendingConfirm.ids.length} 条任务移入回收站？`}
+          </span>
+          <div className="filters">
+            <Button size="sm" disabled={batchBusy} onClick={() => void runBatch(pendingConfirm.action, pendingConfirm.ids)}>确认</Button>
+            <Button size="sm" variant="ghost" onClick={() => setPendingConfirm(null)}>再想想</Button>
+          </div>
+        </div>
+      ) : null}
       {error ? <Notice>{error}</Notice> : null}
       {notice ? <Notice tone="ok">{notice}</Notice> : null}
       {loading && !data ? <p className="muted">加载中…</p> : null}
@@ -304,8 +322,8 @@ export default function TaskListPage() {
               return (
                 <tr
                   key={task.id}
-                  className={isDone && !trash ? 'clickable' : ''}
-                  onClick={() => isDone && !trash && navigate('/bank/report/' + task.id)}
+                  className={isDone ? 'clickable' : ''}
+                  onClick={() => isDone && navigate('/bank/report/' + task.id)}
                 >
                   {isAdmin && (
                     <td onClick={(e) => e.stopPropagation()}>
@@ -326,7 +344,7 @@ export default function TaskListPage() {
                   </td>
                   <td>
                     <Badge
-                      text={isDone ? (task.verdict ?? '待复核') : task.status}
+                      text={isDone ? (task.verdict ?? '待复核') : (STATUS_OPTIONS.find((o) => o.value === task.status)?.label ?? task.status)}
                       tone={isDone ? (VERDICT_TONE[task.verdict ?? ''] ?? 'muted') : 'warn'}
                     />
                     <div className="muted small">{task.authenticity?.label}</div>
@@ -372,31 +390,38 @@ export default function TaskListPage() {
                           <button
                             type="button"
                             className="link-btn danger"
-                            onClick={() => void runBatch('recycle', [task.id])}
+                            onClick={() => requestConfirm('recycle', [task.id])}
                           >
                             删除
                           </button>
                         )}
                       </>
                     ) : (
-                      isAdmin && (
-                        <>
-                          <button
-                            type="button"
-                            className="link-btn"
-                            onClick={() => void runBatch('restore', [task.id])}
-                          >
-                            恢复
-                          </button>
-                          <button
-                            type="button"
-                            className="link-btn danger"
-                            onClick={() => void runBatch('purge', [task.id])}
-                          >
-                            粉碎
-                          </button>
-                        </>
-                      )
+                      <>
+                        {isDone && (
+                          <Link className="link-btn" to={'/bank/report/' + task.id}>
+                            复核报告
+                          </Link>
+                        )}
+                        {isAdmin && (
+                          <>
+                            <button
+                              type="button"
+                              className="link-btn"
+                              onClick={() => void runBatch('restore', [task.id])}
+                            >
+                              恢复
+                            </button>
+                            <button
+                              type="button"
+                              className="link-btn danger"
+                              onClick={() => requestConfirm('purge', [task.id])}
+                            >
+                              粉碎
+                            </button>
+                          </>
+                        )}
+                      </>
                     )}
                   </td>
                 </tr>

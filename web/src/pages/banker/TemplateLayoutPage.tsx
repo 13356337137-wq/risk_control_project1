@@ -244,8 +244,8 @@ export default function TemplateLayoutPage() {
                   const pageDim = (
                     layoutInfo?.layout?.pages as Record<string, { width?: number; height?: number }> | undefined
                   )?.[String(pageIndex)];
-                  const pageW = pageDim?.width && pageDim.width > 0 ? pageDim.width : 595;
-                  const pageH = pageDim?.height && pageDim.height > 0 ? pageDim.height : 842;
+                  const pageW = pageDim?.width && pageDim.width > 0 ? pageDim.width : (layoutInfo?.layout?.page_size?.w || 595);
+                  const pageH = pageDim?.height && pageDim.height > 0 ? pageDim.height : (layoutInfo?.layout?.page_size?.h || 842);
                   const nx0 = b.x0 > 1 ? b.x0 / pageW : b.x0;
                   const nx1 = b.x1 > 1 ? b.x1 / pageW : b.x1;
                   const ny0 = b.y0 > 1 ? b.y0 / pageH : b.y0;

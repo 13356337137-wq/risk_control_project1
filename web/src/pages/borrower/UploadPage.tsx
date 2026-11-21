@@ -177,6 +177,10 @@ export default function UploadPage() {
             const created = await createTask(fields, files[index]);
             setJobs((prev) => prev.map((job) => (job.id === index ? { ...job, status: 'done', taskId: created.task_id } : job)));
           } catch (err) {
+            if (err instanceof ApiError && err.code === 'E_ENCRYPT') {
+              setNeedPassword(true);
+              setError('部分文件设有打开口令，请填写口令后重新提交。');
+            }
             const message = getErrorMessage(err, 'borrower');
             setJobs((prev) => prev.map((job) => (job.id === index ? { ...job, status: 'error', error: message } : job)));
           }

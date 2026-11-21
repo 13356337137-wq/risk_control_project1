@@ -1,5 +1,5 @@
 import type { InspectBand, InspectCell, InspectPage, InspectSingle } from '../../api/lab';
-import { COLUMN_LABELS, canonicalField, labelOf } from '../../lib/columns';
+import { COLUMN_LABELS, labelOf } from '../../lib/columns';
 
 export type ToolMode = 'select' | 'draw_col' | 'draw_area' | 'draw_single' | 'header_line' | 'spread';
 export type PageSlot = 'first' | 'middle' | 'last' | 'auto';
@@ -19,6 +19,7 @@ export type ColumnBox = {
   regionId: string;
   field: string;
   label?: string;
+  headerText?: string;
   x: number; // normalized [0, 1]
   w: number; // normalized [0, 1]
   source: string;
@@ -74,6 +75,8 @@ export const SINGLE_FIELD_OPTIONS: { key: string; label: string }[] = [
   { key: 'account_name', label: '户名' },
   { key: 'bank_branch', label: '开户行' },
   { key: 'account_type', label: '账户类型' },
+  { key: 'period', label: '交易起止日期' },
+  { key: 'currency', label: '币种' },
 ];
 
 export const DEFAULT_REQUIRED_FIELDS = ['txn_date', 'amount', 'balance'];
@@ -250,7 +253,7 @@ export function fromSavedLayout(layoutRaw: unknown): {
       headerY: clamp01(Number(t.headerY ?? area.y ?? 0.16)),
     });
     for (const c of t.columns || []) {
-      const fkey = canonicalField(c.field || c.fields?.[0] || 'summary');
+      const fkey = c.field || c.fields?.[0] || 'summary';
       columns.push({
         id: uid('col'),
         regionId: rid,
@@ -294,10 +297,12 @@ export function buildTemplatePayload(
       .sort((a, b) => a.x - b.x)
       .map((c) => {
         fieldMap[c.field] = fieldLabel(c.field, customFields);
+        const lbl = fieldLabel(c.field, customFields);
         return {
           field: c.field,
           fields: [c.field],
-          label: fieldLabel(c.field, customFields),
+          label: lbl,
+          header_text: c.headerText || lbl,
           x: Number(clamp01(c.x).toFixed(4)),
           w: Number(Math.max(0.008, Math.min(1 - clamp01(c.x), c.w)).toFixed(4)),
         };
@@ -327,11 +332,15 @@ export function buildTemplatePayload(
     h: Number(Math.max(0.012, Math.min(1 - clamp01(s.y), s.h)).toFixed(4)),
   }));
 
+  // 生成稳定的表头序列指纹（layout_hash），便于同银行多版式匹配
+  const headerSig = (tables[0]?.columns ?? []).map((c) => c.header_text || c.label).join('|');
   return {
     fieldMap,
     layout: {
       ...(pageSize ? { page_size: pageSize } : {}),
       page_count: pageCount,
+      page_base: 0,
+      ...(headerSig ? { layout_hash: headerSig } : {}),
       tables,
       meta_boxes: metaBoxes,
       ...(customFields.length > 0 ? { custom_fields: customFields } : {}),

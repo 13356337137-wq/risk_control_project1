@@ -425,6 +425,11 @@ def infer_template_api(
         payload["preview"] = {"error": str(exc)[:120]}
 
     payload["valid"] = result["valid"]
+    if save_draft and not result["valid"] and not allow_invalid:
+        payload["saved"] = False
+        payload["saved_invalid"] = False
+        payload["reject_reason"] = "反验未通过，已拦截草稿入库（如需强制保存请勾选允许保存未通过草稿）"
+        return payload
     if save_draft:
         file_id = None
         try:
