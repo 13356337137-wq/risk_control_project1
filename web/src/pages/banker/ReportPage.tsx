@@ -59,10 +59,37 @@ type SelfCheckData = {
 type VerificationData = {
   status?: string;
   changed?: boolean;
+  checked_at?: string;
   verified_at?: string;
+  txn_count_fast?: number;
+  txn_count_slow?: number;
+  diff_count?: number;
+  diffs?: Record<string, unknown>[];
+  reason?: string;
+  coverage?: number;
   summary?: string;
   notes?: string[];
 };
+
+function verifyStatusMeta(status?: string) {
+  switch (status) {
+    case 'passed':
+    case 'verified':
+      return { cls: 'pill ok', label: '已复核' };
+    case 'discrepancy':
+      return { cls: 'pill err', label: '发现差异' };
+    case 'failed':
+      return { cls: 'pill warn', label: '复核未完成' };
+    case 'pending':
+      return { cls: 'pill warn', label: '待复核' };
+    default:
+      return { cls: 'pill', label: status || '—' };
+  }
+}
+
+function isNormalizedCoord(x?: number, y?: number): boolean {
+  return x !== undefined && y !== undefined && x >= 0 && x <= 1 && y >= 0 && y <= 1;
+}
 
 type CustomStatItem = {
   field: string;
@@ -121,6 +148,11 @@ export default function ReportPage() {
   const [docPageCount, setDocPageCount] = useState(1);
   const [docBaseSize, setDocBaseSize] = useState<PageRenderSize | null>(null);
   const [marker, setMarker] = useState<{ page: number; x?: number; y?: number; label?: string } | null>(null);
+  const [docPassword, setDocPassword] = useState('');
+  const [docPasswordInput, setDocPasswordInput] = useState('');
+  const [needDocPassword, setNeedDocPassword] = useState(false);
+  const [docPasswordWrong, setDocPasswordWrong] = useState(false);
+  const [docRenderError, setDocRenderError] = useState('');
 
   // 加白 & 复核状态
   const [whitelistOpen, setWhitelistOpen] = useState(false);
@@ -253,7 +285,8 @@ export default function ReportPage() {
   }
   if (!report) return <p className="muted">加载中…</p>;
 
-  const score = report.scores?.overall;
+  const trustScore = report.trust?.score;
+  const overallScore = report.scores?.overall;
   const valued = metrics.filter((metric) => metric.value !== null).length;
   const verification = (report.verification || {}) as VerificationData;
   const selfCheck = report.self_check as SelfCheckData | SelfCheckData['items'] | null | undefined;
@@ -272,8 +305,11 @@ export default function ReportPage() {
         <div>
           <div className="report-title-row">
             <h1>{report.verdict}</h1>
-            <span className={'pill ' + (verification.status === 'verified' ? 'ok' : verification.status === 'pending' ? 'warn' : '')}>
-              复核：{verification.status === 'verified' ? '已完成' : verification.status === 'pending' ? '待复核' : (verification.status || '—')}
+            <span className={verifyStatusMeta(verification.status).cls}>
+              复核：{verifyStatusMeta(verification.status).label}
+              {verification.status === 'discrepancy' && typeof verification.diff_count === 'number'
+                ? `（${verification.diff_count} 处）`
+                : ''}
             </span>
           </div>
           <p className="sub">{report.verdict_reason}</p>
@@ -340,8 +376,14 @@ export default function ReportPage() {
       )}
 
       <div className="score-row">
-        <div className="score"><span className="score-value">{score ?? report.trust?.score ?? '—'}</span><span className="muted small">真实性得分</span></div>
-        <div className="score"><span className="score-value">{report.scores?.grade_label ?? report.trust?.label ?? '—'}</span><span className="muted small">分级</span></div>
+        <div className="score">
+          <span className="score-value">{trustScore ?? '—'}</span>
+          <span className="muted small">真实性得分{report.trust?.label ? ` · ${report.trust.label}` : ''}</span>
+        </div>
+        <div className="score">
+          <span className="score-value">{overallScore ?? '—'}</span>
+          <span className="muted small">综合评分{report.scores?.grade_label ? ` · ${report.scores.grade_label}` : ''}</span>
+        </div>
         <div className="score"><span className="score-value">{valued}/{metrics.length}</span><span className="muted small">指标有值</span></div>
         <div className="score"><span className="score-value">{report.materials?.length ?? 0}</span><span className="muted small">提交材料</span></div>
       </div>
@@ -529,10 +571,26 @@ export default function ReportPage() {
             <div className="verify-block" style={{ marginTop: 18 }}>
               <h3>慢通道复核状态</h3>
               <p className="small muted">
-                状态：{verification.status || '—'}
-                {verification.verified_at ? ` · 时间：${verification.verified_at}` : ''}
+                <span className={verifyStatusMeta(verification.status).cls} style={{ marginRight: 8 }}>
+                  {verifyStatusMeta(verification.status).label}
+                </span>
+                {(verification.checked_at || verification.verified_at) ? `时间：${verification.checked_at || verification.verified_at}` : ''}
+                {typeof verification.txn_count_fast === 'number' ? ` · 快通道 ${verification.txn_count_fast} 笔` : ''}
+                {typeof verification.txn_count_slow === 'number' ? ` · 慢通道 ${verification.txn_count_slow} 项` : ''}
+                {typeof verification.diff_count === 'number' ? ` · 差异 ${verification.diff_count} 处` : ''}
+                {verification.reason ? ` · 原因：${verification.reason}` : ''}
                 {verification.summary ? ` · ${verification.summary}` : ''}
               </p>
+              {verification.diffs?.length ? (
+                <details style={{ marginTop: 8 }}>
+                  <summary className="small">查看慢通道差异明细（{verification.diffs.length} 条）</summary>
+                  <ul className="plain small" style={{ marginTop: 6 }}>
+                    {verification.diffs.slice(0, 30).map((d, i) => (
+                      <li key={i} className="mono">{typeof d === 'string' ? d : JSON.stringify(d)}</li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
               {verification.notes?.length ? (
                 <ul className="plain small">
                   {verification.notes.map((n, i) => <li key={i}>{n}</li>)}
@@ -612,7 +670,11 @@ export default function ReportPage() {
                         <td className="small muted">{item.page_no ?? '—'}</td>
                         <td className="small muted">{item.txn_id ?? '—'}</td>
                         <td className="small muted mono">
-                          {item.x === undefined ? '—' : Math.round(item.x) + ', ' + Math.round(item.y ?? 0) + ' pt'}
+                          {item.x === undefined
+                            ? '—'
+                            : isNormalizedCoord(item.x, item.y ?? 0)
+                              ? `${(item.x * 100).toFixed(1)}%, ${((item.y ?? 0) * 100).toFixed(1)}%`
+                              : `${Math.round(item.x)}, ${Math.round(item.y ?? 0)} pt`}
                         </td>
                         <td className="actions-cell">
                           <button
@@ -680,6 +742,33 @@ export default function ReportPage() {
                   <Button size="sm" variant="ghost" onClick={() => setDrawerOpen(false)}>关闭原件</Button>
                 </div>
               </div>
+              {needDocPassword && (
+                <div className="import-box" style={{ marginBottom: 10 }}>
+                  <strong>该原件受口令保护，请输入 PDF 打开口令以调阅：</strong>
+                  {docPasswordWrong ? <span className="small" style={{ color: '#c0392b', marginLeft: 8 }}>口令不正确，请重试</span> : null}
+                  <div className="try-row" style={{ marginTop: 8 }}>
+                    <input
+                      type="password"
+                      placeholder="输入 PDF 打开口令"
+                      value={docPasswordInput}
+                      onChange={(e) => setDocPasswordInput(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      disabled={!docPasswordInput.trim()}
+                      onClick={() => {
+                        setDocPassword(docPasswordInput.trim());
+                        setNeedDocPassword(false);
+                        setDocPasswordWrong(false);
+                        setDocRenderError('');
+                      }}
+                    >
+                      解锁原件
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {docRenderError ? <Notice>{docRenderError}</Notice> : null}
               {fileLoading ? (
                 <p className="muted">原件加载中…</p>
               ) : fileBytes ? (
@@ -689,9 +778,17 @@ export default function ReportPage() {
                     mimeHint={fileMime}
                     pageIndex={docPageIdx}
                     zoom={1.0}
+                    password={docPassword || undefined}
+                    onPasswordRequired={(wrong) => {
+                      setNeedDocPassword(true);
+                      setDocPasswordWrong(Boolean(wrong));
+                    }}
+                    onError={(msg) => setDocRenderError(msg)}
                     onPageInfo={(info) => {
                       setDocPageCount(info.pageCount || 1);
                       setDocBaseSize(info);
+                      setNeedDocPassword(false);
+                      setDocRenderError('');
                     }}
                     overlay={
                       marker &&
@@ -699,19 +796,24 @@ export default function ReportPage() {
                       marker.x !== undefined &&
                       marker.y !== undefined &&
                       docBaseSize &&
-                      docBaseSize.baseWidth > 0 ? (
-                        <div className="ann-overlay" style={{ pointerEvents: 'none' }}>
-                          <div
-                            className="evidence-pin"
-                            style={{
-                              left: `${Math.max(0, Math.min(98, (marker.x / docBaseSize.baseWidth) * 100))}%`,
-                              top: `${Math.max(0, Math.min(98, (marker.y / docBaseSize.baseHeight) * 100))}%`,
-                            }}
-                          >
-                            <span>{marker.label || '命中位置'}</span>
+                      docBaseSize.baseWidth > 0 ? (() => {
+                        const norm = isNormalizedCoord(marker.x, marker.y);
+                        const leftPct = norm ? marker.x * 100 : (marker.x / docBaseSize.baseWidth) * 100;
+                        const topPct = norm ? marker.y * 100 : (marker.y / docBaseSize.baseHeight) * 100;
+                        return (
+                          <div className="ann-overlay" style={{ pointerEvents: 'none' }}>
+                            <div
+                              className="evidence-pin"
+                              style={{
+                                left: `${Math.max(0, Math.min(98, leftPct))}%`,
+                                top: `${Math.max(0, Math.min(98, topPct))}%`,
+                              }}
+                            >
+                              <span>{marker.label || '命中位置'}</span>
+                            </div>
                           </div>
-                        </div>
-                      ) : null
+                        );
+                      })() : null
                     }
                   />
                 </div>

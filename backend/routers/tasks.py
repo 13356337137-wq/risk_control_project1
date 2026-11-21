@@ -915,10 +915,14 @@ def add_supplement(
     )
     max_seq = db.scalar(select(func.max(TaskFile.seq)).where(TaskFile.task_id == task.id)) or 0
     db.add(TaskFile(task_id=task.id, file_id=file_obj.id, role="supplement", seq=int(max_seq) + 1))
-    transition(task, "PARSING")
+    transition(task, "QUEUED")
     db.add(AuditLog(
         action="add_supplement", object_type="task", object_id=task.id,
         detail=f"file={_safe_file_name(file.filename)}; file_id={file_obj.id}",
     ))
     db.commit()
-    return {"task_id": task.id, "status": task.status, "file_id": file_obj.id, "material_count": int(max_seq) + 1}
+    mode = worker.submit_task(task.id)
+    return {
+        "task_id": task.id, "status": task.status, "file_id": file_obj.id,
+        "material_count": int(max_seq) + 1, "mode": mode,
+    }

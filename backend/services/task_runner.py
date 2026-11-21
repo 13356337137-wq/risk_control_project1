@@ -68,6 +68,8 @@ def run_task(task_id: int, password: str | None = None) -> dict:
         session.close()
         return {"task_id": task_id, "status": "MISSING", "txn_count": 0}
     try:
+        from db.models import TaskFile  # noqa: PLC0415
+
         file_row = session.get(FileObj, task.file_id) if task.file_id else None
         if file_row is None or not file_row.storage_path:
             raise RuntimeError("任务没有可用的原始文件")
@@ -75,6 +77,41 @@ def run_task(task_id: int, password: str | None = None) -> dict:
         if not path.exists():
             raise RuntimeError("原始文件已被清理，无法分析")
         data = path.read_bytes()
+
+        # 读取该任务的全部材料（含补件 task_file），若全为 PDF 则按 seq 合并页流统一分析
+        tf_rows = (
+            session.query(TaskFile)
+            .filter(TaskFile.task_id == task.id)
+            .order_by(TaskFile.seq.asc())
+            .all()
+        )
+        material_blobs: list[tuple[str, bytes, int]] = []
+        if tf_rows:
+            for tf in tf_rows:
+                fobj = session.get(FileObj, tf.file_id)
+                if fobj and fobj.storage_path and Path(fobj.storage_path).exists():
+                    material_blobs.append((tf.role or "original", Path(fobj.storage_path).read_bytes(), fobj.id))
+        if not material_blobs:
+            material_blobs = [("original", data, file_row.id)]
+        if len(material_blobs) > 1 and all(b[:4] == b"%PDF" for _, b, _ in material_blobs):
+            try:
+                import pymupdf as _fitz  # noqa: PLC0415
+
+                merged_doc = _fitz.open()
+                try:
+                    for _, blob, _ in material_blobs:
+                        src_doc = _fitz.open(stream=blob, filetype="pdf")
+                        try:
+                            if src_doc.needs_pass and password:
+                                src_doc.authenticate(password)
+                            merged_doc.insert_pdf(src_doc)
+                        finally:
+                            src_doc.close()
+                    data = merged_doc.tobytes()
+                finally:
+                    merged_doc.close()
+            except Exception:  # noqa: BLE001 - 合并失败时回退主文件不阻断
+                pass
 
         template = None
         template_row = None
@@ -146,9 +183,19 @@ def run_task(task_id: int, password: str | None = None) -> dict:
         session.commit()
 
         preread = run_preread(data, password=password)
+        # 接入 OCR 路由配置（should_use_api），按图片/页数决定本地或云端并发路由
+        ocr_route: tuple[bool, dict] | None = None
+        try:
+            from services import ocr_routing as _ocr_routing  # noqa: PLC0415
+
+            img_count = max(len(material_blobs), int(getattr(preread, "pages", 1) or 1))
+            ocr_route = _ocr_routing.should_use_api(session, img_count)
+        except Exception:  # noqa: BLE001
+            ocr_route = None
         result = run_analysis(
             data, password=password, template=template, preread=preread,
             thresholds=threshold_service.build_config(session),
+            ocr_route=ocr_route,
         )
 
         # 临时标注没被采用时，必须在报告里说明——否则用户会以为解析用的是他那份标注
@@ -180,6 +227,8 @@ def run_task(task_id: int, password: str | None = None) -> dict:
             "preread": result.get("preread"),
             "footer_count": result.get("footer_count"),
             "parse_coverage": result.get("parse_coverage"),
+            "material_count": len(material_blobs),
+            "ocr_route": result.get("ocr_route"),
         }
         task.finished_at = datetime.now()
 

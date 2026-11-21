@@ -1,4 +1,4 @@
-import { NavLink, Route, Routes, useNavigate } from 'react-router-dom';
+import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import { clearSession, getUser } from '../../auth/store';
 import TaskListPage from './TaskListPage';
 import ReportPage from './ReportPage';
@@ -16,7 +16,6 @@ import DashboardPage from './DashboardPage';
 import GlossaryPage from './GlossaryPage';
 import MetricDefsPage from './MetricDefsPage';
 import VerificationDefsPage from './VerificationDefsPage';
-import ComingSoon from '../ComingSoon';
 
 /**
  * 银行侧工作台。
@@ -24,7 +23,7 @@ import ComingSoon from '../ComingSoon';
  * 侧栏按「受理与报告 / 模板 / 参数 / 系统」分组，和旧版的信息架构保持一致——
  * 客户经理的心智模型是按任务走的，不是按功能表走的。
  *
- * 模板、标注、阈值、实体合并、OCR 路由与看板还没迁完，路由指向占位页并给出旧入口。
+ * 所有核心银行侧页面已合入单一 SPA，并保留规范路由别名兼容旧书签。
  */
 export default function BankerApp() {
   const navigate = useNavigate();
@@ -88,6 +87,7 @@ export default function BankerApp() {
             <Route path="tasks" element={<TaskListPage />} />
             <Route path="report/:id" element={<ReportPage />} />
             <Route path="annotate" element={<AnnotatePage />} />
+            <Route path="annotate/*" element={<AnnotatePage />} />
             <Route path="templates" element={<TemplatesPage />} />
             <Route path="templates/:id" element={<TemplateDetailPage />} />
             <Route path="templates/:id/layout" element={<TemplateLayoutPage />} />
@@ -100,13 +100,21 @@ export default function BankerApp() {
             <Route path="verifications" element={<VerificationDefsPage />} />
             <Route path="audit" element={<AuditPage />} />
             <Route path="users" element={<UsersPage />} />
+            {/* 规范路由与旧书签别名兼容 */}
+            <Route path="dashboard" element={<Navigate to="/bank" replace />} />
+            <Route path="ocr-routing" element={<Navigate to="/bank/ocr" replace />} />
+            <Route path="metric-defs" element={<Navigate to="/bank/metrics" replace />} />
+            <Route path="verification-defs" element={<Navigate to="/bank/verifications" replace />} />
+            <Route path="import" element={<Navigate to="/bank/templates" replace />} />
+            <Route path="import-template" element={<Navigate to="/bank/templates" replace />} />
             <Route
               path="*"
               element={
-                <ComingSoon
-                  title="这个页面还没迁完"
-                  detail="模板库、标注、风控参数、客户与账户、OCR 路由、看板仍在旧版里，迁移期间请用 /bank-old/ 访问。"
-                />
+                <div className="panel">
+                  <h1>页面不存在</h1>
+                  <p className="sub">未找到对应的工作台地址，请返回看板重新进入。</p>
+                  <button type="button" className="btn" onClick={() => navigate('/bank')}>返回看板</button>
+                </div>
               }
             />
           </Routes>

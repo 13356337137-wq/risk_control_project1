@@ -451,7 +451,9 @@ def test_borrower_isolation_and_state_guards(isolated_client, tmp_path: Path):
         headers=admin_hdr,
         data={"marks": json.dumps([{"field": "txn_date", "x": 0.1, "y": 0.2}])},
     )
-    assert bad_transition.status_code == 400
+    # 第二批 B4 起，NEED_SUPPLEMENT -> QUEUED 是合法迁移（补件后重跑），
+    # 所以从「需补件」状态发起重解析不再是 400，而应被受理
+    assert bad_transition.status_code in (200, 202)
 
     # 6. Non-admin save-from-canvas draft must not disable existing enabled template
     layout_spdb = {

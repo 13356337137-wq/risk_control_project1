@@ -40,17 +40,30 @@ export async function request<T>(path: string, options: Options = {}): Promise<T
       signal: options.signal ?? controller.signal,
     });
 
-    if (response.status === 401) {
-      clearSession();
-      throw new ApiError('E_AUTH', '登录已过期', { httpStatus: 401 });
-    }
-
     const text = await response.text();
     const payload = text ? safeJson(text) : null;
+    const rawDetail = (payload as { detail?: unknown } | null)?.detail;
+    const detailObj =
+      rawDetail && typeof rawDetail === 'object'
+        ? (rawDetail as { code?: string; message?: string })
+        : null;
+    const detailMsg =
+      typeof rawDetail === 'string'
+        ? rawDetail
+        : (detailObj?.message ?? '');
+
+    if (response.status === 401) {
+      const isLoginReq = path.startsWith('/auth/login');
+      if (!isLoginReq && token) clearSession();
+      throw new ApiError(
+        detailObj?.code ?? 'E_AUTH',
+        detailMsg || (isLoginReq ? '用户名或密码不正确' : '登录已过期'),
+        { httpStatus: 401, detail: payload },
+      );
+    }
 
     if (!response.ok) {
-      const detail = (payload as { detail?: { code?: string; message?: string } } | null)?.detail;
-      throw new ApiError(detail?.code ?? 'E_UNKNOWN', detail?.message ?? response.statusText, {
+      throw new ApiError(detailObj?.code ?? 'E_UNKNOWN', detailMsg || response.statusText, {
         httpStatus: response.status,
         detail: payload,
       });

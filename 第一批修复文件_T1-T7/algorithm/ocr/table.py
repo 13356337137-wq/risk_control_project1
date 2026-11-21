@@ -1,0 +1,337 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "txn_date": ("交易时间", "交易日期", "记账日期", "交易发生日期", "交易发生时间", "交易日", "日期"),
+    "reference_no": ("参考号", "流水号", "交易流水号", "凭证号", "业务编号", "交易单号", "交易编号"),
+    "summary": ("摘要", "交易摘要", "交易类型", "商品", "用途", "交易说明", "附言", "备注"),
+    "counterparty": ("交易对方", "对方户名", "对方名称", "对方账户名", "对手方", "对手信息", "商户名称", "收款方", "对方账号与户名", "对方姓名"),
+    "account_name": ("户名", "账户名称", "本方户名", "账户名", "开户人"),
+    "direction": ("收/支", "收支", "借贷标志", "借贷方向", "收付标志", "借/贷", "方向"),
+    "amount": ("收入/支出金额", "金额(元)", "金额（元）", "交易金额", "发生额", "交易额", "金额", "发生金额"),
+    "amount_in": ("收入金额", "贷方发生额", "贷方金额"),
+    "amount_out": ("支出金额", "借方发生额", "借方金额"),
+    "balance": ("账户余额", "交易后余额", "当前余额", "余额"),
+}
+
+_MULTI_FIELD = {"amount_in", "amount_out"}
+
+# 前后端字段别名归一化：新版画布写入 counterparty_name，解析核心统一为 counterparty
+FIELD_NAME_NORMALIZE: dict[str, str] = {
+    "counterparty_name": "counterparty",
+}
+
+
+def canonical_field(name: str) -> str:
+    """将前后端可能不一致的字段名归一化为解析内部标准名。"""
+    key = str(name or "").strip()
+    return FIELD_NAME_NORMALIZE.get(key, key)
+
+# 前后端字段别名归一化：新版画布写入 counterparty_name，解析核心统一为 counterparty
+FIELD_NAME_NORMALIZE: dict[str, str] = {
+    "counterparty_name": "counterparty",
+}
+
+
+def canonical_field(name: str) -> str:
+    """将前后端可能不一致的字段名归一化为解析内部标准名。"""
+    key = str(name or "").strip()
+    return FIELD_NAME_NORMALIZE.get(key, key)
+
+# 前后端字段别名归一化：新版画布写入 counterparty_name，解析核心统一为 counterparty
+FIELD_NAME_NORMALIZE: dict[str, str] = {
+    "counterparty_name": "counterparty",
+}
+
+
+def canonical_field(name: str) -> str:
+    """将前后端可能不一致的字段名归一化为解析内部标准名。"""
+    key = str(name or "").strip()
+    return FIELD_NAME_NORMALIZE.get(key, key)
+
+
+@dataclass(frozen=True)
+class Word:
+    text: str
+    x0: float
+    x1: float
+    top: float
+    bottom: float
+    confidence: float = 1.0
+
+    @property
+    def cx(self) -> float:
+        return (self.x0 + self.x1) / 2
+
+
+@dataclass
+class Line:
+    words: list[Word] = field(default_factory=list)
+    top: float = 0.0
+    bottom: float = 0.0
+
+    @property
+    def center(self) -> float:
+        return (self.top + self.bottom) / 2
+
+    @property
+    def text(self) -> str:
+        return " ".join(w.text for w in self.words)
+
+
+@dataclass(frozen=True)
+class Column:
+    field: str
+    left: float
+    right: float
+
+
+def group_lines(words: list[Word], y_tol: float = 3.0) -> list[Line]:
+    lines: list[Line] = []
+    for word in sorted(words, key=lambda w: ((w.top + w.bottom) / 2, w.x0)):
+        cy = (word.top + word.bottom) / 2
+        if lines and abs(cy - lines[-1].center) <= y_tol:
+            lines[-1].words.append(word)
+            line = lines[-1]
+            line.top = min(line.top, word.top)
+            line.bottom = max(line.bottom, word.bottom)
+        else:
+            lines.append(Line(words=[word], top=word.top, bottom=word.bottom))
+    for line in lines:
+        line.words.sort(key=lambda w: w.x0)
+    return lines
+
+
+def _norm(text: str) -> str:
+    table = str.maketrans({"（": "(", "）": ")", "／": "/", "：": ":", "　": " "})
+    return "".join(text.translate(table).split())
+
+
+def _one_edit_apart(a: str, b: str) -> bool:
+    """两串是否只差一个字（插入/删除/替换）。用于 OCR 形近字容错（曰/日、巳/已）。"""
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la > lb:
+        a, b, la, lb = b, a, lb, la
+    i = 0
+    while i < la and a[i] == b[i]:
+        i += 1
+    if la == lb:
+        return a[i + 1:] == b[i + 1:]
+    return a[i:] == b[i + 1:]
+
+
+def match_field(text: str) -> tuple[str, int] | None:
+    """返回 (规范字段, 匹配长度)。
+
+    匹配顺序：精确 → 包含（最长优先）→ 单字容错。
+    容错只对长度 >= 3 的别名生效：OCR 常把「交易日期」认成「交易曰期」，
+    但两字别名（摘要/金额）做容错会误判，故不走模糊。
+    """
+    value = _norm(text)
+    if not value:
+        return None
+    best: tuple[str, int] | None = None
+    fuzzy: tuple[str, int] | None = None
+    for canonical, aliases in FIELD_ALIASES.items():
+        for alias in aliases:
+            key = _norm(alias)
+            if value == key:
+                return canonical, len(key)
+            if key in value and len(key) >= 2:
+                if best is None or len(key) > best[1]:
+                    best = (canonical, len(key))
+                continue
+            if len(key) >= 3 and len(value) <= len(key) + 2 and _one_edit_apart(value, key):
+                if fuzzy is None or len(key) > fuzzy[1]:
+                    fuzzy = (canonical, len(key))
+    return best or fuzzy
+
+
+def merge_tokens(line: Line, gap: float = 2.0) -> list[Word]:
+    tokens: list[Word] = []
+    for word in line.words:
+        if tokens and word.x0 - tokens[-1].x1 <= gap:
+            prev = tokens[-1]
+            tokens[-1] = Word(
+                text=prev.text + word.text,
+                x0=prev.x0,
+                x1=max(prev.x1, word.x1),
+                top=min(prev.top, word.top),
+                bottom=max(prev.bottom, word.bottom),
+            )
+        else:
+            tokens.append(word)
+    return tokens
+
+
+def find_header(
+    lines: list[Line],
+    field_map: dict[str, str | int] | None = None,
+    limit: int = 20,
+) -> tuple[Line, list[Word], dict[int, str]] | None:
+    best: tuple[int, Line, list[Word], dict[int, str]] | None = None
+    for line in lines[:limit]:
+        tokens = merge_tokens(line)
+        mapping: dict[int, str] = {}
+        for idx, token in enumerate(tokens):
+            hit = match_field(token.text)
+            if hit:
+                mapping[idx] = hit[0]
+        if field_map:
+            mapping = apply_template(tokens, mapping, field_map)
+        score = len({v for v in mapping.values()})
+        if score >= 3 and (best is None or score > best[0]):
+            best = (score, line, tokens, mapping)
+    if best is None:
+        return None
+    return best[1], best[2], best[3]
+
+
+def apply_template(tokens: list[Word], mapping: dict[int, str], field_map: dict[str, str | int]) -> dict[int, str]:
+    """模板显式映射优先：同一字段只保留模板指定的那一列，去掉表头自动识别的重名列。"""
+    merged = dict(mapping)
+    claimed: dict[str, int] = {}
+    for raw_canonical, target in field_map.items():
+        canonical = canonical_field(raw_canonical)
+        idx: int | None = None
+        if isinstance(target, int):
+            if 0 <= target < len(tokens):
+                idx = target
+        else:
+            want = _norm(target)
+            for i, token in enumerate(tokens):
+                if _norm(token.text) == want:
+                    idx = i
+                    break
+        if idx is None:
+            continue
+        merged[idx] = canonical
+        claimed[canonical] = idx
+    for idx, canonical in list(merged.items()):
+        if canonical in claimed and claimed[canonical] != idx:
+            del merged[idx]
+    return merged
+
+
+def _pick_layout_table(layout: dict, page_no: int | None, total_pages: int | None) -> dict | None:
+    """按当前页号/多页槽位（first/second/middle/last/auto）选择匹配的表格配置。"""
+    tables = [t for t in (layout.get("tables") or []) if t.get("columns") or t.get("area")]
+    if not tables:
+        return None
+    if page_no is None:
+        return tables[0]
+    for t in tables:
+        if t.get("page") is not None and int(t.get("page")) == page_no and (t.get("slot") or "") != "auto":
+            return t
+
+    def _by_slot(name: str) -> dict | None:
+        for t in tables:
+            if (t.get("slot") or "first") == name:
+                return t
+        return None
+
+    total = total_pages if total_pages and total_pages > 0 else 1
+    if page_no == 0 or total == 1:
+        return _by_slot("first") or _by_slot("auto") or tables[0]
+    if total == 2:
+        return _by_slot("last") or _by_slot("middle") or _by_slot("second") or _by_slot("first") or _by_slot("auto") or tables[0]
+    if page_no == 1:
+        return _by_slot("second") or _by_slot("middle") or _by_slot("first") or _by_slot("auto") or tables[0]
+    if page_no == total - 1:
+        return _by_slot("last") or _by_slot("middle") or _by_slot("first") or _by_slot("auto") or tables[0]
+    return _by_slot("middle") or _by_slot("second") or _by_slot("first") or _by_slot("auto") or tables[0]
+
+
+def build_columns_from_layout(table: dict | None, page_size: dict | None) -> list[Column]:
+    """仅凭模板某页的 layout.columns 直接构造列边界（表头 OCR 失败时由 headerY 兜底用）。"""
+    if not table:
+        return []
+    width = float((page_size or {}).get("w") or 0)
+    if width <= 0:
+        return []
+    built: list[Column] = []
+    seen: set[str] = set()
+    for c in (table.get("columns") or []):
+        raw_f = c.get("field") or ((c.get("fields") or [None])[0])
+        f = canonical_field(str(raw_f)) if raw_f else ""
+        if not f or f in seen or c.get("x") is None or not c.get("w"):
+            continue
+        seen.add(f)
+        left = float(c["x"]) * width
+        right = left + float(c["w"]) * width
+        built.append(Column(field=f, left=left, right=right))
+    return built
+
+
+def build_columns(tokens: list[Word], mapping: dict[int, str],
+                  layout: dict | None = None,
+                  page_no: int | None = None,
+                  total_pages: int | None = None,
+                  target_table: dict | None = None) -> list[Column]:
+    """按列边界切分。优先用模板当前页/槽位的框画范围（layout），否则按表头词中心推算。
+
+    为什么优先 layout：表头词中心是「文字位置」，字宽、空格、对齐都会让它偏离真实列边界；
+    layout 是人工在样本上画出来的「列范围」，版式一致时它更准，也让「改框画范围」真正生效。
+    多页模板按当前 page_no/slot 取对应表的列几何，不再全局拍平。
+    """
+    # ---- 优先：用 layout 的列几何 ----
+    if layout:
+        tb = target_table or _pick_layout_table(layout, page_no, total_pages)
+        cols = list((tb or {}).get("columns") or [])
+        if not cols:
+            for item in (layout.get("tables") or []):
+                cols.extend(item.get("columns") or [])
+        page_size = layout.get("page_size") or {}
+        width = float(page_size.get("w") or 0)
+        if cols and width > 0:
+            by_field: dict[str, dict] = {}
+            for c in cols:
+                raw_f = c.get("field") or ((c.get("fields") or [None])[0])
+                f = canonical_field(str(raw_f)) if raw_f else ""
+                if f and f not in by_field:
+                    by_field[f] = c
+            centers = [t.cx for t in tokens]
+            fallback = [-1e9]
+            for left, right in zip(centers, centers[1:]):
+                fallback.append((left + right) / 2)
+            fallback.append(1e9)
+            built: list[Column] = []
+            for idx, raw_canonical in mapping.items():
+                canonical = canonical_field(raw_canonical)
+                c = by_field.get(canonical)
+                if c and c.get("x") is not None and c.get("w"):
+                    left = float(c["x"]) * width
+                    right = left + float(c["w"]) * width
+                else:
+                    # 回退到表头词中心（索引越界时给一个宽区间，避免丢列）
+                    lo = fallback[idx] if idx < len(fallback) else -1e9
+                    hi = fallback[idx + 1] if idx + 1 < len(fallback) else 1e9
+                    left, right = lo, hi
+                built.append(Column(field=canonical, left=left, right=right))
+            if built:
+                return built
+
+    centers = [t.cx for t in tokens]
+    bounds = [-1e9]
+    for left, right in zip(centers, centers[1:]):
+        bounds.append((left + right) / 2)
+    bounds.append(1e9)
+    columns: list[Column] = []
+    for idx, canonical in mapping.items():
+        columns.append(Column(field=canonical, left=bounds[idx], right=bounds[idx + 1]))
+    return columns
+
+
+def line_cells(line: Line, columns: list[Column]) -> dict[str, list[Word]]:
+    cells: dict[str, list[Word]] = {}
+    for word in line.words:
+        for col in columns:
+            if col.left <= word.cx < col.right:
+                cells.setdefault(col.field, []).append(word)
+                break
+    return cells

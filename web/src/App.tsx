@@ -1,5 +1,5 @@
-import { lazy, Suspense } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { lazy, Suspense, useEffect } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { RequireRole } from './auth/guards';
 import LandingPage from './pages/public/LandingPage';
 import LoginPage from './pages/public/LoginPage';
@@ -10,9 +10,32 @@ import ComingSoon from './pages/ComingSoon';
 const BorrowerApp = lazy(() => import('./pages/borrower/BorrowerApp'));
 const BankerApp = lazy(() => import('./pages/banker/BankerApp'));
 
+function LegacyHashRedirect() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    const rawHash = window.location.hash || '';
+    if (!rawHash.startsWith('#/')) return;
+    const sub = rawHash.slice(1);
+    const prefix = location.pathname.startsWith('/bank')
+      ? '/bank'
+      : location.pathname.startsWith('/app')
+        ? '/app'
+        : '';
+    const target = sub.startsWith('/bank') || sub.startsWith('/app') || sub.startsWith('/login')
+      ? sub
+      : `${prefix}${sub}`;
+    if (target && target !== location.pathname + location.search) {
+      navigate(target, { replace: true });
+    }
+  }, [location.pathname, location.search, navigate]);
+  return null;
+}
+
 export default function App() {
   return (
     <Suspense fallback={<div className="boot">加载中…</div>}>
+      <LegacyHashRedirect />
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<LoginPage />} />

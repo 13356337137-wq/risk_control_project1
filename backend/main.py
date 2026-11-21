@@ -4,7 +4,7 @@ import logging
 from pathlib import Path as _Path
 import sys
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings

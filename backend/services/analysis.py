@@ -161,6 +161,7 @@ def run_analysis(
     template: dict | None = None,
     preread: object | None = None,
     thresholds: object | None = None,
+    ocr_route: tuple[bool, dict] | None = None,
 ) -> dict:
     """返回 {carrier, pages, has_text_layer, txn_count, report, metrics, bank} 供落库。"""
     raw = file_bytes
@@ -263,7 +264,17 @@ def run_analysis(
             if "解析不完整" not in label:
                 scores["grade_label"] = (label + "·解析不完整").strip("·")
 
+    route_info = None
+    if ocr_route is not None:
+        use_api, rcfg = ocr_route
+        route_info = {
+            "engine": "cloud_api" if (use_api and carrier != "electronic") else "local",
+            "cloud_eligible": bool(use_api),
+            "workers": int((rcfg or {}).get("workers") or 2),
+            "model": (rcfg or {}).get("model") or "PP-OCRv6",
+        }
     return {
+        "ocr_route": route_info,
         "carrier": carrier,
         "pages": pages,
         "has_text_layer": has_text,

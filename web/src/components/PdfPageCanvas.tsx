@@ -16,7 +16,8 @@ type Props = {
   pageIndex: number; // 0-based
   zoom: number;
   password?: string;
-  onPasswordRequired?: () => void;
+  /** wrong=true 表示「给了口令但打不开」，界面据此提示口令不正确 */
+  onPasswordRequired?: (wrong?: boolean) => void;
   onPageInfo?: (info: PageRenderSize) => void;
   onError?: (message: string) => void;
   overlay?: ReactNode;

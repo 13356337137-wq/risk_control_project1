@@ -47,12 +47,51 @@ type MergeResult = {
     risk_hits?: number;
     verdict?: string | null;
   }[];
-  metrics?: { code: string; name: string; value: number | null; unit: string; how?: string }[];
+  metrics?: { code: string; name: string; value: number | string | null; unit: string; how?: string; note?: string }[];
   risk?: { level?: string; hits?: number };
   unsupported?: { code: string; name: string; reason: string }[];
   warnings?: string[];
   explain?: Record<string, string>;
 };
+
+function formatMetricValue(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) ? num.toFixed(2) : String(value);
+}
+
+function normalizeMergeResult(raw: unknown, fallbackMethod: string, labelHint?: string): MergeResult {
+  const obj = (raw ?? {}) as Record<string, unknown>;
+  // GET /entities/merge 已是嵌套结构；POST /tasks/merge 返回平铺结构 {mode, label, formula, raw_txn_count, txn_count, ...}
+  if (obj.coverage || obj.method) {
+    return obj as MergeResult;
+  }
+  const modeId = String(obj.mode || fallbackMethod);
+  const rawMetrics = Array.isArray(obj.metrics) ? (obj.metrics as Record<string, unknown>[]) : [];
+  return {
+    subject: labelHint || '指定任务集',
+    method: {
+      id: modeId,
+      label: String(obj.label || modeId),
+      short: '',
+      formula: String(obj.formula || ''),
+    },
+    coverage: {
+      raw_txn_count: typeof obj.raw_txn_count === 'number' ? obj.raw_txn_count : undefined,
+      merged_txn_count: typeof obj.txn_count === 'number' ? obj.txn_count : undefined,
+      dropped_duplicates: typeof obj.dropped_duplicates === 'number' ? obj.dropped_duplicates : 0,
+      internal_transfers: typeof obj.internal_transfers === 'number' ? obj.internal_transfers : 0,
+    },
+    metrics: rawMetrics.map((m) => ({
+      code: String(m.code || ''),
+      name: String(m.name || ''),
+      value: (m.value as number | string | null) ?? null,
+      unit: String(m.unit || ''),
+      how: String(m.how || m.note || ''),
+    })),
+    warnings: Array.isArray(obj.notes) ? (obj.notes as string[]) : [],
+  };
+}
 
 export default function EntitiesPage() {
   const [data, setData] = useState<EntitiesPayload | null>(null);
@@ -71,17 +110,19 @@ export default function EntitiesPage() {
     Promise.all([getEntities(), getMergeMethods()])
       .then(([ent, mRes]) => {
         setData(ent);
-        setMethods(mRes.methods || []);
-        if (mRes.methods?.length && !mRes.methods.some((m) => m.id === selectedMethod)) {
-          setSelectedMethod(mRes.methods[0].id);
+        const list = mRes.methods || [];
+        setMethods(list);
+        if (list.length) {
+          setSelectedMethod((prev) => (list.some((m) => m.id === prev) ? prev : list[0].id));
         }
-        if (!selectedSubject && ent.subjects?.length) {
-          const firstKey = String((ent.subjects[0] as { key?: string; subject?: string }).key || ent.subjects[0].subject || '');
-          setSelectedSubject(firstKey);
+        if (ent.subjects?.length) {
+          const s0 = ent.subjects[0] as { holder_masked?: string; key?: string; subject?: string };
+          const firstKey = String(s0.holder_masked || s0.key || s0.subject || '');
+          setSelectedSubject((prev) => prev || firstKey);
         }
       })
       .catch((err) => setError(getErrorMessage(err, 'banker')));
-  }, [selectedMethod, selectedSubject]);
+  }, []);
 
   useEffect(() => {
     load();
@@ -95,7 +136,7 @@ export default function EntitiesPage() {
     setError('');
     try {
       const res = await getEntitiesMerge(sub, selectedMethod, overlapMode);
-      setMergeResult(res as MergeResult);
+      setMergeResult(normalizeMergeResult(res, selectedMethod, sub));
     } catch (err) {
       setError(getErrorMessage(err, 'banker'));
     } finally {
@@ -116,7 +157,7 @@ export default function EntitiesPage() {
     setError('');
     try {
       const res = await mergeTasks(ids, selectedMethod);
-      setMergeResult(res as MergeResult);
+      setMergeResult(normalizeMergeResult(res, selectedMethod, `任务 ${ids.join(', ')}`));
       setNotice(`已按「${selectedMethod}」口径合并任务 ${ids.join(', ')}。`);
     } catch (err) {
       setError(getErrorMessage(err, 'banker'));
@@ -158,7 +199,7 @@ export default function EntitiesPage() {
   }
 
   const conflicts = (data?.conflicts ?? []) as ConflictItem[];
-  const subjects = (data?.subjects ?? []) as { key?: string; subject?: string; accounts?: Record<string, number> | string[]; tasks?: number[] }[];
+  const subjects = (data?.subjects ?? []) as { holder_masked?: string; key?: string; subject?: string; accounts?: Record<string, number> | string[]; tasks?: number[] }[];
 
   return (
     <div className="panel wide">
@@ -187,8 +228,8 @@ export default function EntitiesPage() {
           <div className="filters">
             <select value={selectedSubject} onChange={(e) => setSelectedSubject(e.target.value)} aria-label="选择客户主体">
               <option value="">选择客户主体…</option>
-              {subjects.map((s) => {
-                const key = String(s.key || s.subject || '');
+              {subjects.map((s, idx) => {
+                const key = String(s.holder_masked || s.key || s.subject || `主体#${idx + 1}`);
                 const taskCount = s.tasks?.length ?? 0;
                 return (
                   <option key={key} value={key}>
@@ -257,9 +298,9 @@ export default function EntitiesPage() {
                     <tr key={m.code}>
                       <td className="mono small">{m.code}</td>
                       <td>{m.name}</td>
-                      <td className="mono">{m.value == null ? '—' : m.value.toFixed(2)}</td>
+                      <td className="mono">{formatMetricValue(m.value)}</td>
                       <td className="small muted">{m.unit}</td>
-                      <td className="small muted">{m.how || '—'}</td>
+                      <td className="small muted">{m.how || m.note || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
