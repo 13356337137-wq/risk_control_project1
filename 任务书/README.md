@@ -19,8 +19,10 @@
 | --- | --- | --- | --- |
 | `W47-01-前端.md` | 前端 | `web/` | 8 |
 | `W47-02-后端.md` | 后端（含 Lab 服务） | `lab_service/`、`backend/` | 9 |
-| `W47-03-算法.md` | 算法 | `algorithm/`、`rc_platform/capabilities/` | 5 |
+| `W47-03-算法.md` | 算法 | `algorithm/`、`rc_platform/capabilities/` | 6 |
 | `W47-04-数据.md` | 数据 | `data/` | 5 |
+
+合计 **28 张卡**（前端 8 / 后端 9 / 算法 6 / 数据 5）。
 
 ## 三、依赖图（谁等谁）
 
