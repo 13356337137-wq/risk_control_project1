@@ -282,3 +282,107 @@
 | `POST /api/v1/lab/evaluate` | 按表达式或已保存的 `code` 试算 |
 | `GET/POST/DELETE /api/v1/lab/custom` | 自定义特征的列表/保存（版本化）/删除 |
 | `GET /api/v1/health` | 修正：不再被 `/api/{path:path}` 兜底吃成 404 |
+---
+
+# 特征 Lab 独立服务契约（v3，2026-11-21）
+
+> 完整设计见 `方案设计/特征Lab独立化方案.md`。本节只写**接口与数据契约**，改动前先改这里。
+
+## 定位变化
+
+| 项 | v2 | v3 |
+| --- | --- | --- |
+| 形态 | 挂在业务后端进程内的 16 个路由 | 独立服务 `lab_service/`，端口 **8030** |
+| 鉴权 | 复用业务系统 JWT（`require_banker`） | 服务间 **`X-Api-Key`**；业务系统前端不直连 |
+| 交互 | 一次请求算一次，结果直接返回 | **提交 → `run_id` + 指标清单 → 按 `run_id` 取数值** |
+| 输入 | 交易行或合成样本 | **结构化 rows JSON 为主**，PDF 为可选入口 |
+| 结果留存 | 无 | MySQL `lab_run` / `lab_run_value`，保留 **30 天** |
+
+## 服务基址与鉴权
+
+| 项 | 约定 |
+| --- | --- |
+| 基址 | `http://127.0.0.1:8030`（不外网） |
+| 鉴权 | `X-Api-Key` 头；`/healthz` 与 `/ui` 下静态页豁免 |
+| 错误信封 | `detail` 里的 `code` 与 `message` —— **与现有实现一致**，不引入第二套信封 |
+| 金额 | 字符串或 `DECIMAL(28,8)`；**禁止 JSON 浮点** |
+| 时间 | ISO 8601 带 `+08:00` |
+| 幂等 | `request_hash` 相同且在有效期内 → 返回同一 `run_id` |
+
+## 接口清单（Lab 服务）
+
+| 方法 | 路径 | 说明 | 错误 |
+| --- | --- | --- | --- |
+| POST | `/v1/runs` | 提交流水，返回 `run_id` 与可用/不可算清单 | 400/401/404/413 |
+| POST | `/v1/runs/file` | 可选：直接传 PDF（multipart） | 400/401/422 |
+| GET | `/v1/runs/{run_id}` | run 概要（不含数值） | 404/410 |
+| GET | `/v1/runs/{run_id}/features` | 按 `codes` 批量取指标值 | 404/410 |
+| GET | `/v1/runs/{run_id}/features/{code}` | 单个指标值 | 404/410 |
+| GET | `/v1/catalog/features` | 46 条内置特征（含口径、表达式、分类） | — |
+| GET | `/v1/catalog/operators` | 83 个算子 | — |
+| POST | `/v1/expr/evaluate` | 表达式试算 | 422 |
+| GET | `/healthz` | 状态、目录版本、DB 连通 | — |
+### 提交一次计算
+
+```jsonc
+// POST /v1/runs 请求
+{
+  "profile": {"carrier": "electronic", "bank_code": "CCB"},
+  "rows": [{"txn_date": "2021-05-13", "direction": "in",
+             "amount": "9671.74", "balance": "9691.67"}],
+  "codes": ["f_in_total"],
+  "client_ref": "task-167"
+}
+```
+
+```jsonc
+// 201 响应：反馈 = run_id + 指标清单
+{ "run_id": "run_9f3c1a2b", "status": "succeeded", "rows": 570,
+  "feature_catalog_version": "1.0",
+  "expires_at": "2026-12-21T21:00:00+08:00",
+  "available": [{"code": "f_in_total", "name": "入账总额", "unit": "元"}],
+  "unavailable": [{"code": "f_night_count", "reason": "缺 trade_time 列"}] }
+```
+
+### 按 run_id 取指标
+
+```jsonc
+// GET /v1/runs/{run_id}/features?codes=f_in_total
+{ "run_id": "run_9f3c1a2b",
+  "items": [{"code": "f_in_total", "value": "596599.17", "unit": "元", "reason": null},
+            {"code": "f_night_count", "value": null, "reason": "缺 trade_time 列"}] }
+```
+
+**硬规则**：算不出来 → `value: null` 加 `reason`，**绝不返回 0**。
+## 上限
+
+| 项 | 值 | 超限 |
+| --- | --- | --- |
+| 单次 rows | 20000 行 | `413 E_LIMIT` |
+| 单次 codes | 200 个 | `400 E_PARAM` |
+| 请求体 | 32 MB | `413 E_LIMIT` |
+| 未知 code | — | `404 E_NOT_FOUND`（列出未知项） |
+| run 过期 | 30 天 | `410 E_EXPIRED` |
+
+## 新增数据表（v3）
+
+| 表 | 用途 | 约束 |
+| --- | --- | --- |
+| `lab_run` | 一次计算（run 句柄、幂等哈希、过期时间） | `run_id` 唯一；`request_hash` 索引；`expires_at` 索引 |
+| `lab_run_value` | run 的单项结果 | `(run_id, code)` 唯一；数值进 `DECIMAL(28,8)` |
+| `feature_dict` `metric_dict` `operator_dict` | 口径字典（从代码导出，防漂移） | 条数须为 46 / 40 / 83 |
+
+## 兼容期（W47–W50）
+
+| 旧路径（业务后端） | 兼容期行为 | W51 |
+| --- | --- | --- |
+| `/api/v1/features/*` | 反代到 8030，注入 Key，保留 `require_banker` | 删除 |
+| `/api/v1/lab/*` | 同上 | 删除 |
+
+代理铁律：**只转发、不改字段、不改状态码**。新增 `GET /api/v1/lab-bridge/health` 供前端显示连接状态。
+
+## 变更日志
+
+| 日期 | 变更 | 由谁 |
+| --- | --- | --- |
+| 2026-11-21 | 新增 v3 章节：Lab 拆独立服务、run 两段式契约、lab_run 表 | Lead（用户拍板） |
