@@ -12,6 +12,39 @@ from decimal import Decimal
 from pathlib import Path
 
 
+def _page_count(blob: bytes, password: str | None = None) -> int:
+    """Return a material's page count without trusting client-supplied metadata."""
+    if not blob.startswith(b"%PDF"):
+        return 1
+    try:
+        import pymupdf  # noqa: PLC0415
+
+        document = pymupdf.open(stream=blob, filetype="pdf")
+        try:
+            if document.needs_pass and password:
+                document.authenticate(password)
+            return len(document)
+        finally:
+            document.close()
+    except Exception:  # noqa: BLE001 - a failed count must not discard a valid material
+        return 1
+
+
+def _build_material_manifest(
+    material_blobs: list[tuple[str, bytes, object]], password: str | None = None
+) -> list[dict]:
+    """Convert persisted task materials to the report's traceable contract shape."""
+    return [
+        {
+            "file_id": file_obj.id,
+            "role": role,
+            "pages": _page_count(blob, password),
+            "sha256": file_obj.sha256,
+        }
+        for role, blob, file_obj in material_blobs
+    ]
+
+
 def _commit_with_retry(session, attempts: int = 3) -> None:
     """并发写 metric_value 可能触发 1213 死锁，退避重试。"""
     import time as _time
@@ -85,14 +118,14 @@ def run_task(task_id: int, password: str | None = None) -> dict:
             .order_by(TaskFile.seq.asc())
             .all()
         )
-        material_blobs: list[tuple[str, bytes, int]] = []
+        material_blobs: list[tuple[str, bytes, FileObj]] = []
         if tf_rows:
             for tf in tf_rows:
                 fobj = session.get(FileObj, tf.file_id)
                 if fobj and fobj.storage_path and Path(fobj.storage_path).exists():
-                    material_blobs.append((tf.role or "original", Path(fobj.storage_path).read_bytes(), fobj.id))
+                    material_blobs.append((tf.role or "original", Path(fobj.storage_path).read_bytes(), fobj))
         if not material_blobs:
-            material_blobs = [("original", data, file_row.id)]
+            material_blobs = [("original", data, file_row)]
         if len(material_blobs) > 1 and all(b[:4] == b"%PDF" for _, b, _ in material_blobs):
             try:
                 import pymupdf as _fitz  # noqa: PLC0415
@@ -275,6 +308,9 @@ def run_task(task_id: int, password: str | None = None) -> dict:
             pass
 
         report_row = result["report"]
+        # run_analysis only sees a merged byte stream, so its default manifest cannot
+        # identify supplements.  Restore the persisted material lineage here.
+        report_row["materials"] = _build_material_manifest(material_blobs, password)
         from sqlalchemy import func as _sa_func  # noqa: PLC0415
         prev_ver = session.query(_sa_func.max(Report.version)).filter(Report.task_id == task.id).scalar() or 0
         session.add(Report(
